@@ -148,7 +148,7 @@ void uartslkInit(void)
 
   // Configure Rx buffer not empty interrupt
   NVIC_InitStructure.NVIC_IRQChannel = UARTSLK_IRQ;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = NVIC_HIGH_PRI;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = NVIC_SYSLINK_PRI;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
@@ -360,7 +360,7 @@ void uartslkTxenFlowctrlIsr()
   }
 }
 
-void __attribute__((used)) EXTI4_IRQHandler(void)
+void __attribute__((used)) EXTI4_Callback(void)
 {
   uartslkTxenFlowctrlIsr();
 }
