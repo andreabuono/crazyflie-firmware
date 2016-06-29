@@ -46,6 +46,11 @@
 #include "log.h"
 #include "nvicconf.h"
 
+#ifdef ESTIMATOR_TYPE_kalman
+#include "stabilizer_types.h"
+#include "estimator_kalman.h"
+#endif
+
 #include "libdw1000.h"
 
 // Minimal MAC packet format
@@ -306,6 +311,12 @@ static void dwm1000Task(void *param)
     } else {
       rangingState |= (1<<current_anchor);
       failedRanging[current_anchor] = 0;
+#ifdef ESTIMATOR_TYPE_kalman
+      distanceMeasurement_t dist;
+      dist.distance = distance[current_anchor];
+      //TODO: Need to set dist.x, dist.y, dist.z, dist.stdDev for current anchor.
+      stateEstimatorEnqueueDistance(&dist);
+#endif
     }
     ranging_complete = false;
 
