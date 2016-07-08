@@ -229,7 +229,7 @@ static arm_matrix_instance_f32 Pm = {STATE_DIM, STATE_DIM, (float *)P};
  */
 
 static bool isInit = false;
-static bool resetEstimation = false;
+static bool resetEstimation = true;
 static int32_t lastPrediction;
 static int32_t lastBaroUpdate;
 static int32_t lastPNUpdate;
@@ -586,6 +586,7 @@ static void stateEstimatorPredict(float cmdThrust, Axis3f *acc, Axis3f *gyro, fl
   // The prediction depends on whether we're on the ground, or in flight.
   // When flying, the accelerometer directly measures thrust (hence is useless to estimate body angle while flying)
   
+  // TODO: Find a better check for whether the quad is flying
   // Assume that the flight begins when the thrust is large enough and for now we never stop "flying".
   quadIsFlying = quadIsFlying || cmdThrust > IN_FLIGHT_THRUST_THRESHOLD;
 
@@ -610,7 +611,7 @@ static void stateEstimatorPredict(float cmdThrust, Axis3f *acc, Axis3f *gyro, fl
 //    S[STATE_PZ] += dt * (acc->z + gyro->y * S[STATE_PX] - gyro->x * S[STATE_PY] - GRAVITY_MAGNITUDE * R[2][2]);
     S[STATE_PZ] += dt * (cmdThrust + gyro->y * S[STATE_PX] - gyro->x * S[STATE_PY] - GRAVITY_MAGNITUDE * R[2][2]);
   }
-  else
+  else // TODO: Do we need to make this distinction (flying/not flying)?
   {
     // position update
     S[STATE_X] += 0;
@@ -1097,11 +1098,16 @@ void stateEstimatorInit(void) {
   gyroAccumulatorCount = 0;
   thrustAccumulatorCount = 0;
   baroAccumulatorCount = 0;
-
-  for (int i=0; i<STATE_DIM; i++) { S[i] = 0; } // initialize states to zero
+  
   S[STATE_X] = 0.5;
   S[STATE_Y] = 0.5;
   S[STATE_Z] = 0;
+  S[STATE_PX] = 0;
+  S[STATE_PY] = 0;
+  S[STATE_PZ] = 0;
+  S[STATE_D0] = 0;
+  S[STATE_D1] = 0;
+  S[STATE_D2] = 0;
 
   // reset the attitude quaternion
   q[0] = 1; q[1] = 0; q[2] = 0; q[3] = 0;
@@ -1132,7 +1138,6 @@ void stateEstimatorInit(void) {
   
   uwbCount = 0;
   isInit = true;
-  resetEstimation = false;
 }
 
 static bool stateEstimatorEnqueueExternalMeasurement(xQueueHandle queue, void *measurement)
