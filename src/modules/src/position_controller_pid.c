@@ -64,7 +64,7 @@ struct this_s {
 };
 
 // Maximum roll/pitch angle permited
-static float rpLimit  = 20;
+static float rpLimit  = 25;
 // Velocity maximums
 static float xyVelMax = 1.0f;
 static float zVelMax  = 1.0f;
@@ -105,7 +105,7 @@ static struct this_s this = {
 
   .pidX = {
     .init = {
-      .kp = 2.0f,
+      .kp = 3.0f,
       .ki = 0,
       .kd = 0,
     },
@@ -114,7 +114,7 @@ static struct this_s this = {
 
   .pidY = {
     .init = {
-      .kp = 2.0f,
+      .kp = 3.0f,
       .ki = 0,
       .kd = 0,
     },
@@ -124,7 +124,7 @@ static struct this_s this = {
   .pidZ = {
     .init = {
       .kp = 2.0f,
-      .ki = 0,
+      .ki = 0.03f,
       .kd = 0.01f,
     },
     .pid.dt = DT,

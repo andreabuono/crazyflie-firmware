@@ -72,14 +72,16 @@
 // anchorPositionOk to enable sending the anchor rangings to the Kalman filter
 
 static lpsAlgoOptions_t algoOptions = {
-  .tagAddress = 0xbccf000000000008,
+  .tagAddress = 0xbccf000000000009,
   .anchorAddress = {
     0xbccf000000000001,
     0xbccf000000000002,
     0xbccf000000000003,
     0xbccf000000000004,
     0xbccf000000000005,
-    0xbccf000000000006
+    0xbccf000000000006,
+    0xbccf000000000007,
+    0xbccf000000000008,
   },
   .antennaDelay = (ANTENNA_OFFSET*499.2e6*128)/299792458.0, // In radio tick
   .rangingFailedThreshold = 6,
@@ -88,17 +90,19 @@ static lpsAlgoOptions_t algoOptions = {
 
   // To set a static anchor position from startup, uncomment and modify the
   // following code:
-/*
+
   .anchorPosition = {
-    {x: 0.99, y: 1.49, z: 1.80},
-    {x: 0.99, y: 3.29, z: 1.80},
-    {x: 4.67, y: 2.54, z: 1.80},
-    {x: 0.59, y: 2.27, z: 0.20},
-    {x: 4.70, y: 3.38, z: 0.20},
-    {x: 4.70, y: 1.14, z: 0.20},
+    {x: 0.00f , y: 0.00f , z: 0.00f},
+    {x: 5.93f , y: 0.00f , z: 0.00f},
+    {x: 0.00f , y: 6.54f , z: 0.00f},
+    {x: 6.05f , y: 6.54f , z: 0.00f},
+    {x: 1.50f , y:-0.10f , z: 3.45f},
+    {x: 1.50f , y: 6.60f , z: 3.45f},
+    {x: 5.20f , y:-0.10f , z: 3.45f},
+    {x: 5.20f , y: 6.60f , z: 3.45f}
   },
   .anchorPositionOk = true,
-*/
+
 };
 
 #if LPS_TDOA_ENABLE
@@ -288,7 +292,7 @@ static void dwm1000Init(DeckInfo *info)
   dwNewConfiguration(dwm);
   dwSetDefaults(dwm);
   dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
-  dwSetChannel(dwm, CHANNEL_2);
+  dwSetChannel(dwm, CHANNEL_5);
   dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
 
   dwSetReceiveWaitTimeout(dwm, RX_TIMEOUT);
