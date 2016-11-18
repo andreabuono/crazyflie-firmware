@@ -68,10 +68,10 @@ typedef struct quaternion_s {
       float q3;
     };
     struct {
+      float w;
       float x;
       float y;
       float z;
-      float w;
     };
   };
 } quaternion_t;

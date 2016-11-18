@@ -23,6 +23,8 @@
  *
  *
  */
+#define CONTROLLER_TYPE_new
+
 #include <math.h>
 
 #include "FreeRTOS.h"
@@ -35,16 +37,21 @@
 #include "stabilizer.h"
 
 #include "sensors.h"
-#include "commander.h"
 #include "ext_position.h"
-#include "sitaw.h"
-#include "controller.h"
 #include "power_distribution.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
 #else
 #include "estimator.h"
+#endif
+
+#ifdef CONTROLLER_TYPE_new
+#include "controller_new.h"
+#else
+#include "commander.h"
+#include "controller.h"
+#include "sitaw.h"
 #endif
 
 static bool isInit;
@@ -119,12 +126,15 @@ static void stabilizerTask(void* param)
     sensorsAcquire(&sensorData, tick);
     stateEstimator(&state, &sensorData, tick);
 #endif
-
+    
+#ifdef CONTROLLER_TYPE_new
+    
+#else
     commanderGetSetpoint(&setpoint, &state);
-
     sitAwUpdateSetpoint(&setpoint, &sensorData, &state);
-
     stateController(&control, &sensorData, &state, &setpoint, tick);
+#endif
+    
     powerDistribution(&control);
 
     tick++;

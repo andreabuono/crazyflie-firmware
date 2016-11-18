@@ -223,7 +223,7 @@ typedef enum
 
 static float S[STATE_DIM];
 
-// The quad's attitude as a quaternion (w,x,y,z)
+// The quad's attitude as a right quaternion (w,x,y,z)  (such that v_I = q* v_B q)
 // We store as a quaternion to allow easy normalization (in comparison to a rotation matrix),
 // while also being robust against singularities (in comparison to euler angles)
 static float q[4] = {1,0,0,0};
