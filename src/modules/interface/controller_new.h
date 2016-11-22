@@ -23,6 +23,7 @@
 void stateControllerInit(void);
 bool stateControllerTest(void);
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state);
+void stateControllerUpdateStateWithExternalPosition();
 
 #define EXTERNAL_MEASUREMENT_STDDEV (0.02)
 
@@ -43,6 +44,7 @@ typedef struct {
   controlReferenceAxis_t x;
   controlReferenceAxis_t y;
   controlReferenceAxis_t z;
+  float yaw;
 } controlReference_t;
 
 typedef struct {
@@ -67,14 +69,15 @@ typedef struct {
   uint8_t controlModeY:2;
   uint8_t controlModeZ:2;
   uint8_t :2;
-} __attribute__((packed)) crtpControlPacketHeader_t;
+} __attribute__((packed)) crtpControlPacketHeader_t; // size 2
 
 typedef struct
 {
-  crtpControlPacketHeader_t header;
-  crtpControlReference_t x;
-  crtpControlReference_t y;
-  crtpControlReference_t z;
+  crtpControlPacketHeader_t header; // size 2
+  crtpControlReference_t x; // size 8
+  crtpControlReference_t y; // size 8
+  crtpControlReference_t z; // size 8
+  float yaw;
 } __attribute__((packed)) crtpControlPacket_t;
 
 typedef struct
@@ -83,4 +86,5 @@ typedef struct
   crtpControlReferenceWithExternalPosition_t x;
   crtpControlReferenceWithExternalPosition_t y;
   crtpControlReferenceWithExternalPosition_t z;
+  float yaw;
 } __attribute__((packed)) crtpControlPacketWithExternalPosition_t;

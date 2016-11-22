@@ -165,18 +165,11 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   float a_des[3] = {xdd_des, ydd_des, zdd+GRAVITY};
   float n_des = norm(3, a_des);
   
-  // calculate the required banking -- ie the elements in the rotation matrix
-  float bank_des[3] = { a_des[0]/n_des , a_des[1]/n_des , a_des[2]/n_des };
-  float bank_error[3] = { R[0][2] - bank_des[0] , R[1][2] - bank_des[1] , R[2][2] - bank_des[2] };
   
-  // perform control on the banking errors
-  // TODO: Signs here could be wrong
-  omega_des[0] = -R[1][0]*bank_error[0] + R[0][0]*bank_error[1];
-  omega_des[1] = -R[
-  
-  
-  // TODO: Yaw control loop
-  // TODO: where to do motor force control?
+  // TODO: convert desired acceleration into roll, pitch, thrust
+  // TODO: read current attitude from state->attitudeQuaternion
+  // TODO: calculate rates based on the above 3 points (1st order control with time constant tau_rp and tau_yaw on angle difference)
+  // TODO: complete the control structure with these calculated rates
   
 }
 
@@ -211,6 +204,8 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
     ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.acc = half2single(packet->z.acc);
     ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.mode = header->controlModeZ;
     
+    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].yaw = packet->yaw;
+    
     ControlReferenceCache.activeSide = !ControlReferenceCache.activeSide;
     ControlReferenceCache.timestamp = xTaskGetTickCount();
   }
@@ -232,6 +227,8 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
     ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.vel = half2single(packet->z.vel);
     ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.acc = packet->z.acc;
     ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.mode = header->controlModeZ;
+  
+    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].yaw = packet->yaw;
   
     ControlReferenceCache.activeSide = !ControlReferenceCache.activeSide;
     ControlReferenceCache.timestamp = xTaskGetTickCount();
