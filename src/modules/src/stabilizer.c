@@ -23,8 +23,6 @@
  *
  *
  */
-#define CONTROLLER_TYPE_new
-
 #include <math.h>
 
 #include "FreeRTOS.h"

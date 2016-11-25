@@ -27,7 +27,7 @@ LPS_TDOA_ENABLE   ?= 0
 ######### Stabilizer configuration ##########
 ##### Sets the name of the stabilizer module to use.
 ESTIMATOR          ?= complementary
-CONTROLLER         ?= pid
+CONTROLLER         ?= new
 POWER_DISTRIBUTION ?= stock
 
 ######### Test activation ##########
@@ -296,7 +296,7 @@ CFLAGS += -MD -MP -MF $(BIN)/dep/$(@).d -MQ $(@)
 CFLAGS += -ffunction-sections -fdata-sections
 
 # Fail on warnings
-CFLAGS += -Werror
+# CFLAGS += -Werror
 
 ASFLAGS = $(PROCESSOR) $(INCLUDES)
 LDFLAGS = --specs=nano.specs $(PROCESSOR) -Wl,-Map=$(PROG).map,--cref,--gc-sections,--undefined=uxTopUsedPriority
