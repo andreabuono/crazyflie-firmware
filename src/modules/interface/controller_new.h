@@ -27,20 +27,20 @@ void stateControllerUpdateStateWithExternalPosition();
 
 #define EXTERNAL_MEASUREMENT_STDDEV (0.02)
 
-typedef enum {
-  CONTROLMODE_ACCELERATION,
-  CONTROLMODE_VELOCITY,
-  CONTROLMODE_POSITION
-} controlMode_t;
+#define CONTROLMODE_ACCELERATION(mode) ((0b001 & mode) != 0)
+#define CONTROLMODE_VELOCITY(mode)     ((0b010 & mode) != 0)
+#define CONTROLMODE_POSITION(mode)     ((0b100 & mode) != 0)
 
 typedef struct {
-  controlMode_t mode;
+  uint8_t mode;
   float pos;
   float vel;
   float acc;
 } controlReferenceAxis_t;
 
 typedef struct {
+  bool setEmergency;
+  bool resetEmergency;
   controlReferenceAxis_t x;
   controlReferenceAxis_t y;
   controlReferenceAxis_t z;
@@ -61,14 +61,13 @@ typedef struct {
 } __attribute__((packed)) crtpControlReferenceWithExternalPosition_t;
 
 typedef struct {
-  uint8_t packetHasExternalReference:1;
-  uint8_t setEmergency:1;
-  uint8_t resetEmergency:1;
-  uint8_t :5;
-  uint8_t controlModeX:2;
-  uint8_t controlModeY:2;
-  uint8_t controlModeZ:2;
-  uint8_t :2;
+  uint16_t packetHasExternalReference:1;
+  uint16_t setEmergency:1;
+  uint16_t resetEmergency:1;
+  uint16_t controlModeX:3;
+  uint16_t controlModeY:3;
+  uint16_t controlModeZ:3;
+  uint16_t :4;
 } __attribute__((packed)) crtpControlPacketHeader_t; // size 2
 
 typedef struct

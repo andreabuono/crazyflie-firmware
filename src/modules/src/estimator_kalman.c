@@ -173,11 +173,11 @@ static inline bool stateEstimatorHasTDOAPacket(tdoaMeasurement_t *uwb) {
 #define IN_FLIGHT_TIME_THRESHOLD (500)
 
 // the reversion of pitch and roll to zero
-#define ROLLPITCH_ZERO_REVERSION (1e-3f)
+#define ROLLPITCH_ZERO_REVERSION (1e-4f)
 
 // The bounds on the covariance, these shouldn't be hit, but sometimes are... why?
 #define MAX_COVARIANCE (100)
-#define MIN_COVARIANCE (1e-6)
+#define MIN_COVARIANCE (1e-6f)
 
 // The bounds on states, these shouldn't be hit...
 #define MAX_POSITION (10) //meters
@@ -619,45 +619,59 @@ static void stateEstimatorPredict(float cmdThrust, Axis3f *acc, Axis3f *gyro, fl
   }
   quadIsFlying = (xTaskGetTickCount()-lastFlightCmd) < IN_FLIGHT_TIME_THRESHOLD;
 
+  float dx, dy, dz;
+  float tmpSPX, tmpSPY, tmpSPZ;
+  float zacc;
+
   if (quadIsFlying) // only acceleration in z direction
   {
     // TODO: In the next lines, can either use cmdThrust/mass, or acc->z. Need to test which is more reliable.
     // cmdThrust's error comes from poorly calibrated mass, and inexact cmdThrust -> thrust map
     // acc->z's error comes from measurement noise and accelerometer scaling
     // float zacc = cmdThrust;
-    float zacc = acc->z;
+    zacc = acc->z;
 
     // position updates in the body frame (will be rotated to inertial frame)
-    float dx = S[STATE_PX] * dt;
-    float dy = S[STATE_PY] * dt;
-    float dz = S[STATE_PZ] * dt + zacc * dt2 / 2.0f; // thrust can only be produced in the body's Z direction
+    dx = S[STATE_PX] * dt;
+    dy = S[STATE_PY] * dt;
+    dz = S[STATE_PZ] * dt + zacc * dt2 / 2.0f; // thrust can only be produced in the body's Z direction
 
     // position update
     S[STATE_X] += R[0][0] * dx + R[0][1] * dy + R[0][2] * dz;
     S[STATE_Y] += R[1][0] * dx + R[1][1] * dy + R[1][2] * dz;
     S[STATE_Z] += R[2][0] * dx + R[2][1] * dy + R[2][2] * dz - GRAVITY_MAGNITUDE * dt2 / 2.0f;
 
+    // keep previous time step's state for the update
+    tmpSPX = S[STATE_PX];
+    tmpSPY = S[STATE_PY];
+    tmpSPZ = S[STATE_PZ];
+
     // body-velocity update: accelerometers + gyros cross velocity - gravity in body frame
-    S[STATE_PX] += dt * (gyro->z * S[STATE_PY] - gyro->y * S[STATE_PZ] - GRAVITY_MAGNITUDE * R[2][0]);
-    S[STATE_PY] += dt * (gyro->z * S[STATE_PX] + gyro->x * S[STATE_PZ] - GRAVITY_MAGNITUDE * R[2][1]);
-    S[STATE_PZ] += dt * (zacc + gyro->y * S[STATE_PX] - gyro->x * S[STATE_PY] - GRAVITY_MAGNITUDE * R[2][2]);
+    S[STATE_PX] += dt * (gyro->z * tmpSPY - gyro->y * tmpSPZ - GRAVITY_MAGNITUDE * R[2][0]);
+    S[STATE_PY] += dt * (-gyro->z * tmpSPX + gyro->x * tmpSPZ - GRAVITY_MAGNITUDE * R[2][1]);
+    S[STATE_PZ] += dt * (zacc + gyro->y * tmpSPX - gyro->x * tmpSPY - GRAVITY_MAGNITUDE * R[2][2]);
   }
   else // Acceleration can be in any direction, as measured by the accelerometer. This occurs, eg. in freefall or while being carried.
   {
     // position updates in the body frame (will be rotated to inertial frame)
-    float dx = S[STATE_PX] * dt + acc->x * dt2 / 2.0f;
-    float dy = S[STATE_PY] * dt + acc->y * dt2 / 2.0f;
-    float dz = S[STATE_PZ] * dt + acc->z * dt2 / 2.0f; // thrust can only be produced in the body's Z direction
+    dx = S[STATE_PX] * dt + acc->x * dt2 / 2.0f;
+    dy = S[STATE_PY] * dt + acc->y * dt2 / 2.0f;
+    dz = S[STATE_PZ] * dt + acc->z * dt2 / 2.0f; // thrust can only be produced in the body's Z direction
 
     // position update
     S[STATE_X] += R[0][0] * dx + R[0][1] * dy + R[0][2] * dz;
     S[STATE_Y] += R[1][0] * dx + R[1][1] * dy + R[1][2] * dz;
     S[STATE_Z] += R[2][0] * dx + R[2][1] * dy + R[2][2] * dz - GRAVITY_MAGNITUDE * dt2 / 2.0f;
 
+    // keep previous time step's state for the update
+    tmpSPX = S[STATE_PX];
+    tmpSPY = S[STATE_PY];
+    tmpSPZ = S[STATE_PZ];
+
     // body-velocity update: accelerometers + gyros cross velocity - gravity in body frame
-    S[STATE_PX] += dt * (acc->x + gyro->z * S[STATE_PY] - gyro->y * S[STATE_PZ] - GRAVITY_MAGNITUDE * R[2][0]);
-    S[STATE_PY] += dt * (acc->y + gyro->z * S[STATE_PX] + gyro->x * S[STATE_PZ] - GRAVITY_MAGNITUDE * R[2][1]);
-    S[STATE_PZ] += dt * (acc->z + gyro->y * S[STATE_PX] - gyro->x * S[STATE_PY] - GRAVITY_MAGNITUDE * R[2][2]);
+    S[STATE_PX] += dt * (acc->x + gyro->z * tmpSPY - gyro->y * tmpSPZ - GRAVITY_MAGNITUDE * R[2][0]);
+    S[STATE_PY] += dt * (acc->y - gyro->z * tmpSPX + gyro->x * tmpSPZ - GRAVITY_MAGNITUDE * R[2][1]);
+    S[STATE_PZ] += dt * (acc->z + gyro->y * tmpSPX - gyro->x * tmpSPY - GRAVITY_MAGNITUDE * R[2][2]);
   }
 
   if(S[STATE_Z] < 0) {
@@ -947,7 +961,7 @@ static void stateEstimatorFinalize(sensorData_t *sensors, uint32_t tick)
   float v2 = S[STATE_D2];
 
   // Move attitude error into attitude if any of the angle errors are large enough
-  if ((fabsf(v0) > 0.1e-3 || fabsf(v1) > 0.1e-3 || fabsf(v2) > 0.1e-3) && (fabsf(v0) < 10 && fabsf(v1) < 10 && fabsf(v2) < 10))
+  if ((fabsf(v0) > 0.1e-3f || fabsf(v1) > 0.1e-3f || fabsf(v2) > 0.1e-3f) && (fabsf(v0) < 10 && fabsf(v1) < 10 && fabsf(v2) < 10))
   {
     float angle = arm_sqrt(v0*v0 + v1*v1 + v2*v2);
     float ca = arm_cos_f32(angle / 2.0f);
@@ -1134,6 +1148,11 @@ void stateEstimatorInit(void) {
   gyroAccumulatorCount = 0;
   thrustAccumulatorCount = 0;
   baroAccumulatorCount = 0;
+
+  // Reset all matrices to 0 (like uppon system reset)
+  memset(q, 0, sizeof(q));
+  memset(R, 0, sizeof(R));
+  memset(P, 0, sizeof(S));
 
   // TODO: Can we initialize this more intelligently?
   S[STATE_X] = 0.5;

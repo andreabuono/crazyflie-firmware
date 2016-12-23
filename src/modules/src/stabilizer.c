@@ -129,7 +129,7 @@ static void stabilizerTask(void* param)
 #endif
     
 #ifdef CONTROLLER_TYPE_new
-    stateControllerUpdateStateWithExternalPosition();
+//    stateControllerUpdateStateWithExternalPosition();
     stateControllerRun(&control, &sensorData, &state);
 #else
     commanderGetSetpoint(&setpoint, &state);
@@ -181,5 +181,8 @@ LOG_ADD(LOG_FLOAT, z, &sensorData.mag.z)
 LOG_GROUP_STOP(mag)
 
 LOG_GROUP_START(controller)
-LOG_ADD(LOG_INT16, ctr_yaw, &control.yaw)
+LOG_ADD(LOG_FLOAT, omega0, &control.omega[0])
+LOG_ADD(LOG_FLOAT, omega1, &control.omega[1])
+LOG_ADD(LOG_FLOAT, omega2, &control.omega[2])
+LOG_ADD(LOG_FLOAT, thrust, &control.thrust)
 LOG_GROUP_STOP(controller)

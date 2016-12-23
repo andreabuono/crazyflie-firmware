@@ -13,15 +13,41 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
+ * ============================================================================
+ *
+ * The controller implemented in this file is based on the paper:
+ *
+ * "Nonlinear Quadrocopter Attitude Control"
+ * http://e-collection.library.ethz.ch/eserv/eth:7387/eth-7387-01.pdf
+ *
+ * and
+ *
+ * "Kalman filtering with an attitude" as published in the PhD thesis "Increased autonomy for quadrocopter systems: trajectory generation, fail-safe strategies, and state estimation"
+ * http://dx.doi.org/10.3929/ethz-a-010655275
+ * TODO: Update the above reference once the paper has been published
+ *
+ * Academic citation would be appreciated.
+ *
+ * BIBTEX ENTRIES:
+      @ARTICLE{BrescianiniNonlinearController2013,
+               title={Nonlinear quadrocopter attitude control},
+               author={Brescianini, Dario and Hehn, Markus and D'Andrea, Raffaello},
+               year={2013},
+               publisher={ETH Zurich}}
+ *
+ * ============================================================================
  */
 
+#include <modules/interface/controller_new.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 #include "arm_math.h"
 
 #include "controller_new.h"
 #include "crtp.h"
 #include "log.h"
+#include "param.h"
 #include "num.h"
 
 
@@ -29,71 +55,157 @@
 #include "estimator_kalman.h"
 #endif
 
+#define GRAVITY (9.81f)
+#define DEG_TO_RAD (((float)M_PI)/180.0f)
+#define ARCMINUTE (((float)M_PI)/10800.0f)
+
+// TODO: move this into a physical constants file
+static float INERTIA[3][3] =
+    {{16.6e-6f, 0.83e-6f, 0.72e-6f},
+     {0.83e-6f, 16.6e-6f, 1.8e-6f},
+     {0.72e-6f, 1.8e-6f, 29.3e-6f}}; // from Julian Förster's System Identification of a Crazyflie
+static arm_matrix_instance_f32 INERTIA_m = {3, 3, (float*)INERTIA};
+
 static float tau_xy = 0.5f;
 static float zeta_xy = 0.2f;
 
 static float tau_z = 0.5f;
 static float zeta_z = 0.75f;
 
-static float tau_q = 0.1f;
+static float tau_rp = 0.2f;
+static float tau_yaw = 0.5f;
 
-static float zdd_min = -0.9f;
-static float f_max = 1.8f;
+static float tau_rp_rate = 0.01f;
+static float tau_yaw_rate = 0.1f;
 
-#define GRAVITY (9.81f)
+static float coll_min = 0.5f*GRAVITY;
+static float coll_max = 1.5f*GRAVITY;
+static float omega_rp_max = 30;
+static float omega_yaw_max = 10;
 
-inline float norm(const int n, const float * const a) {
-  float s = 0;
-  for (int i=0; i<n; i++) {
-    s += a[i]*a[i];
+static inline void mat_trans(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
+{ configASSERT(ARM_MATH_SUCCESS == arm_mat_trans_f32(pSrc, pDst)); }
+static inline void mat_inv(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
+{ configASSERT(ARM_MATH_SUCCESS == arm_mat_inverse_f32(pSrc, pDst)); }
+static inline void mat_mult(const arm_matrix_instance_f32 * pSrcA, const arm_matrix_instance_f32 * pSrcB, arm_matrix_instance_f32 * pDst)
+{ configASSERT(ARM_MATH_SUCCESS == arm_mat_mult_f32(pSrcA, pSrcB, pDst)); }
+static inline float arm_sqrt(float32_t in)
+{ float pOut = 0; arm_status result = arm_sqrt_f32(in, &pOut); configASSERT(ARM_MATH_SUCCESS == result); return pOut; }
+
+
+static inline float vec_norm(const arm_matrix_instance_f32 *pSrcA) {
+  float32_t s = 0;
+  configASSERT( pSrcA->numCols == 1 );
+  
+  float *a = pSrcA->pData;
+  
+  for (int i=0; i<pSrcA->numRows; i++) {
+    s += a[0+1*i]*a[0+1*i];
   }
-  return sqrtf(s);
+  return arm_sqrt(s);
 }
 
-inline float dot(const int n, const float * const a, const float * const b) {
-  float s = 0;
-  for (int i=0; i<n; i++) {
-    s += a[i]*b[i];
+static inline void vec_normalize(arm_matrix_instance_f32 *pSrcA) {
+  float norm = vec_norm(pSrcA);
+  
+  float *a = pSrcA->pData;
+  
+  for (int i=0; i<pSrcA->numRows; i++) {
+    a[i] = a[i]/norm;
+  }
+}
+
+static inline void vec_negate(arm_matrix_instance_f32 *pSrcA) {
+  configASSERT( pSrcA->numCols == 1 );
+  
+  float *a = pSrcA->pData;
+  
+  for (int i=0; i<pSrcA->numRows; i++) {
+    a[i] = -1*a[i];
+  }
+}
+
+static inline float vec_dot(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB) {
+  float32_t s = 0;
+  configASSERT( pSrcA->numCols == 1 );
+  configASSERT( pSrcB->numCols == 1 );
+  configASSERT( pSrcA->numRows == pSrcB->numRows );
+  
+  float *a = pSrcA->pData;
+  float *b = pSrcB->pData;
+  
+  for (int i=0; i<pSrcA->numRows; i++) {
+    s += a[0+1*i] * b[0+1*i];
   }
   return s;
 }
 
-inline void quaternion_normalize(float a[4]) {
-  float n = norm(4,a);
-  for (int i=0; i<4; i++) {
-    a[i] /= n;
+static inline void vec_cross(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB, arm_matrix_instance_f32 *pDst) {
+  float32_t s = 0;
+  configASSERT( pSrcA->numCols == 1 );
+  configASSERT( pSrcB->numCols == 1 );
+  configASSERT( pDst->numCols == 1 );
+  configASSERT( pSrcA->numRows == 3 );
+  configASSERT( pSrcB->numRows == 3 );
+  configASSERT( pDst->numRows == 3 );
+  
+  float *a = pSrcA->pData;
+  float *b = pSrcB->pData;
+  float *c = pDst->pData;
+  
+  c[0] = a[1]*b[2] - a[2]*b[1];
+  c[1] = a[2]*b[0] - a[0]*b[2];
+  c[2] = a[0]*b[1] - a[1]*b[0];
+}
+
+static inline void quaternion_normalize(arm_matrix_instance_f32 *pSrcA) {
+  configASSERT( pSrcA->numCols == 1 );
+  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  
+  vec_normalize(pSrcA);
+  if (pSrcA->pData[0] < 0) {
+    vec_negate(pSrcA);
   }
 }
 
-inline void quaternion_invert(const float * const a, float * result) {
-  result[0] = a[0];
-  result[1] = -a[1];
-  result[2] = -a[2];
-  result[3] = -a[3];
+static inline void quaternion_inverse(const arm_matrix_instance_f32 *pSrcA, arm_matrix_instance_f32 *pDst) {
+  configASSERT( pSrcA->numCols == 1 );
+  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  configASSERT( pDst->numCols == 1 );
+  configASSERT( pDst->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  
+  float *a = pSrcA->pData;
+  float *c = pDst->pData;
+  c[0] = a[0];
+  c[1] = -a[1];
+  c[2] = -a[2];
+  c[3] = -a[3];
+  
+  vec_normalize(pDst);
 }
 
-inline void quaternion_multiply(const float * const a, float * const b, float * result) {
-  result[0] = a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3];
-  result[1] = a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2];
-  result[2] = a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1];
-  result[3] = a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0];
+static inline void quaternion_multiply(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB, arm_matrix_instance_f32 *pDst) {
+  configASSERT( pSrcA->numCols == 1 );
+  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  configASSERT( pSrcB->numCols == 1 );
+  configASSERT( pSrcB->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  configASSERT( pDst->numCols == 1 );
+  configASSERT( pDst->numRows == 4 ); // vector is a quaternion [w, x, y, z]
+  
+  float *a = pSrcA->pData;
+  float *b = pSrcB->pData;
+  float *c = pDst->pData;
+  
+  c[0] = a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3];
+  c[1] = a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2];
+  c[2] = a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1];
+  c[3] = a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0];
 }
 
-
-
-static struct
-{
-  controlReference_t controlReference[2];
-  bool activeSide;
-  uint32_t timestamp; // FreeRTOS ticks
-} ControlReferenceCache;
-
-static struct
-{
-  positionMeasurement_t externalPosition[2];
-  bool activeSide;
-  uint32_t timestamp; // FreeRTOS ticks
-} ExternalPositionCache;
+static uint32_t lastReferenceTimestamp;
+static uint32_t lastExternalPositionTimestamp;
+static xQueueHandle externalPositionQueue;
+static xQueueHandle referenceQueue;
 
 // Struct for logging position information
 static positionMeasurement_t ext_pos;
@@ -108,69 +220,338 @@ void stateControllerInit(void)
     return;
   }
 
+  externalPositionQueue = xQueueCreate(1, sizeof(positionMeasurement_t));
+  referenceQueue = xQueueCreate(1, sizeof(controlReference_t));
+  
   crtpRegisterPortCB(CRTP_PORT_POSITION, stateControllerCrtpCB);
+  
   isInit = true;
 }
 
+static controlReference_t ref;
+static uint32_t lastControlUpdate;
+#define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
 {
-  controlReference_t ref = ControlReferenceCache.controlReference[ControlReferenceCache.activeSide];
+  uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
+  if (ticksSinceLastCommand > M2T(100)) { // require commands at 10Hz
+    control->enable = false;
+    return;
+  }
   
-  float f_des = 0; // desired thrust
-  float omega_des[3] = {0}; // desired body rates
+  bool referenceReceived = (pdTRUE == xQueueReceive(referenceQueue, &ref, 0));
   
-  quaternion_t sq = state->attitudeQuaternion;
-  float q[4] = {sq.w, sq.x, sq.y, sq.z};
-  float R[3][3] = {0};
+  if (referenceReceived)
+  {
+    if (ref.setEmergency)
+    {
+      control->enable = false;
+    }
+    else if (ref.resetEmergency)
+    {
+      control->enable = true;
+    }
   
-  // convert the attitude to a rotation matrix, such that we can rotate body-frame velocity and acc
-  R[0][0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
-  R[0][1] = 2 * q[1] * q[2] - 2 * q[0] * q[3];
-  R[0][2] = 2 * q[1] * q[3] + 2 * q[0] * q[2];
+    if (!control->enable)
+    {
+      return;
+    }
+  }
   
-  R[1][0] = 2 * q[1] * q[2] + 2 * q[0] * q[3];
-  R[1][1] = q[0] * q[0] - q[1] * q[1] + q[2] * q[2] - q[3] * q[3];
-  R[1][2] = 2 * q[2] * q[3] - 2 * q[0] * q[1];
+  if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE) // update at the CONTROL_RATE
+  {
+    // desired accelerations
+    float accDes[3] = {0};
+    arm_matrix_instance_f32 accDes_m = {3, 1, accDes};
   
-  R[2][0] = 2 * q[1] * q[3] - 2 * q[0] * q[2];
-  R[2][1] = 2 * q[2] * q[3] + 2 * q[0] * q[1];
-  R[2][2] = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
+    float collCmd = 0; // desired thrust
   
-  // compute required z acceleration
-  float zdd = (1.0f/(tau_z*tau_z) * (ref.z.pos - state->position.z) +
-               2.0f*zeta_z/tau_z * (ref.z.vel - state->velocity.z) +
-               ref.z.acc);
+    // attitude error as computed by the reduced attitude controller
+    float attErrorReduced[4] = {0};
+    arm_matrix_instance_f32 attErrorReduced_m = {4, 1, attErrorReduced};
   
-  zdd = max(zdd, zdd_min*GRAVITY); // don't let us fall faster than gravity
+    // desired attitude as computed by the reduced attitude controller
+    float attDesiredReduced[4] = {0};
+    arm_matrix_instance_f32 attDesiredReduced_m = {4, 1, attDesiredReduced};
   
-  // compute required thrust to achieve zdd
-  f_des = 1.0f/R[2][2] * (zdd + GRAVITY);
-  f_des = min(f_max*GRAVITY, f_des); // cap thrust at 1.8*g
+    // attitude error as computed by the full attitude controller
+    float attErrorFull[4] = {0};
+    arm_matrix_instance_f32 attErrorFull_m = {4, 1, attErrorFull};
   
-  // FYI: this thrust should result in the accelerations
-  // xdd = R02*f
-  // ydd = R12*f
+    // desired attitude as computed by the full attitude controller
+    float attDesiredFull[4] = {0};
+    arm_matrix_instance_f32 attDesiredFull_m = {4, 1, attDesiredFull};
   
-  // compute required body angle based on desired x and y accelerations
-  float xdd_des = (1.0f / (tau_xy*tau_xy) * (ref.x.pos - state->position.x) +
-             2.0f * zeta_xy / tau_xy * (ref.x.vel - state->velocity.x) +
-             ref.x.acc);
+    // current attitude
+    quaternion_t sq = state->attitudeQuaternion;
+    float q[4] = {sq.w, sq.x, sq.y, sq.z};
+    arm_matrix_instance_f32 attitude_m = {4, 1, q};
   
-  float ydd_des = (1.0f / (tau_xy*tau_xy) * (ref.y.pos - state->position.y) +
-             2.0f * zeta_xy / tau_xy * (ref.y.vel - state->velocity.y) +
-             ref.y.acc);
-
-  // desired acceleration in global frame
-  float a_des[3] = {xdd_des, ydd_des, zdd+GRAVITY};
-  float n_des = norm(3, a_des);
+    // inverse of current attitude
+    float qI[4] = {0};
+    arm_matrix_instance_f32 attitudeI_m = {4, 1, qI};
+    quaternion_inverse(&attitude_m, &attitudeI_m);
+  
+    // a few temporary quaternions
+    float temp1[4] = {0};
+    arm_matrix_instance_f32 temp1_m = {4, 1, temp1};
+  
+    float temp2[4] = {0};
+    arm_matrix_instance_f32 temp2_m = {4, 1, temp2};
   
   
-  // TODO: convert desired acceleration into roll, pitch, thrust
-  // TODO: read current attitude from state->attitudeQuaternion
-  // TODO: calculate rates based on the above 3 points (1st order control with time constant tau_rp and tau_yaw on angle difference)
-  // TODO: complete the control structure with these calculated rates
   
+    // body frame -> inertial frame :  vI = R*vB
+    static float R[3][3] = {0};
+    arm_matrix_instance_f32 R_m = {3, 3, (float *) R};
+  
+    R[0][0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
+    R[0][1] = 2 * q[1] * q[2] - 2 * q[0] * q[3];
+    R[0][2] = 2 * q[1] * q[3] + 2 * q[0] * q[2];
+  
+    R[1][0] = 2 * q[1] * q[2] + 2 * q[0] * q[3];
+    R[1][1] = q[0] * q[0] - q[1] * q[1] + q[2] * q[2] - q[3] * q[3];
+    R[1][2] = 2 * q[2] * q[3] - 2 * q[0] * q[1];
+  
+    R[2][0] = 2 * q[1] * q[3] - 2 * q[0] * q[2];
+    R[2][1] = 2 * q[2] * q[3] + 2 * q[0] * q[1];
+    R[2][2] = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
+  
+    // compute the position and velocity errors
+    float pError[] = {ref.x.pos - state->position.x,
+                      ref.y.pos - state->position.y,
+                      ref.z.pos - state->position.z};
+  
+    float vError[] = {ref.x.vel - state->velocity.x,
+                      ref.y.vel - state->velocity.y,
+                      ref.z.vel - state->velocity.z};
+  
+  
+    // ====== LINEAR CONTROL ======
+  
+    // compute desired accelerations in X, Y and Z
+    accDes[0] = 0;
+    if (CONTROLMODE_POSITION(ref.x.mode))
+    { accDes[0] += 1 / tau_xy / tau_xy * pError[0]; }
+    if (CONTROLMODE_VELOCITY(ref.x.mode))
+    { accDes[0] += 2 * zeta_xy / tau_xy * vError[0]; }
+    if (CONTROLMODE_ACCELERATION(ref.x.mode))
+    { accDes[0] += ref.x.acc; }
+  
+    accDes[1] = 0;
+    if (CONTROLMODE_POSITION(ref.y.mode))
+    { accDes[1] += 1 / tau_xy / tau_xy * pError[1]; }
+    if (CONTROLMODE_VELOCITY(ref.y.mode))
+    { accDes[1] += 2 * zeta_xy / tau_xy * vError[1]; }
+    if (CONTROLMODE_ACCELERATION(ref.y.mode))
+    { accDes[1] += ref.y.acc; }
+  
+    accDes[2] = GRAVITY;
+    if (CONTROLMODE_POSITION(ref.z.mode))
+    { accDes[2] += 1 / tau_z / tau_z * pError[2]; }
+    if (CONTROLMODE_VELOCITY(ref.z.mode))
+    { accDes[2] += 2 * zeta_z / tau_z * vError[2]; }
+    if (CONTROLMODE_ACCELERATION(ref.z.mode))
+    { accDes[2] += ref.z.acc; }
+  
+  
+    // ====== THRUST CONTROL ======
+  
+    // compute commanded thrust required to achieve the z acceleration
+    collCmd = accDes[2] / R[2][2];
+    collCmd = constrain(collCmd, coll_min, coll_max);
+  
+    // FYI: this thrust will result in the accelerations
+    // xdd = R02*coll
+    // ydd = R12*coll
+  
+    // a unit vector pointing in the direction of the desired thrust (ie. the direction of body's z axis in the inertial frame)
+    float magAcc = vec_norm(&accDes_m);
+    float zI_des[3] = {accDes[0], accDes[1], accDes[2]};
+    arm_matrix_instance_f32 zI_des_m = {3, 1, zI_des};
+    vec_normalize(&zI_des_m);
+  
+    // a unit vector pointing in the direction of the current thrust
+    float zI_cur[3] = {R[0][2], R[1][2], R[2][2]};
+    arm_matrix_instance_f32 zI_cur_m = {3, 1, zI_cur};
+    vec_normalize(&zI_cur_m);
+  
+    // a unit vector pointing in the direction of the inertial frame z-axis
+    float zI[3] = {0, 0, 1};
+    arm_matrix_instance_f32 zI_m = {3, 1, zI};
+  
+  
+  
+    // ====== REDUCED ATTITUDE CONTROL ======
+  
+    // compute the error angle between the current and the desired thrust directions
+    float dotProd = vec_dot(&zI_cur_m, &zI_des_m);
+    dotProd = constrain(dotProd, -1, 1);
+    float alpha = acosf(dotProd);
+  
+    // the axis around which this rotation needs to occur in the inertial frame (ie. an axis orthogonal to the two)
+    float rotAxisI[3] = {0};
+    arm_matrix_instance_f32 rotAxisI_m = {3, 1, rotAxisI};
+    if (fabsf(alpha) > 1 * ARCMINUTE)
+    {
+      vec_cross(&zI_cur_m, &zI_des_m, &rotAxisI_m);
+      vec_normalize(&rotAxisI_m);
+    }
+    else
+    {
+      rotAxisI[0] = 1;
+      rotAxisI[1] = 1;
+      rotAxisI[2] = 0;
+    }
+  
+    // the attitude error quaternion
+    attErrorReduced[0] = cosf(alpha / 2.0f);
+    attErrorReduced[1] = sinf(alpha / 2.0f) * rotAxisI[0];
+    attErrorReduced[2] = sinf(alpha / 2.0f) * rotAxisI[1];
+    attErrorReduced[3] = sinf(alpha / 2.0f) * rotAxisI[2];
+  
+    // choose the shorter rotation
+    if (sinf(alpha / 2.0f) < 0)
+    { vec_negate(&rotAxisI_m); }
+    if (cosf(alpha / 2.0f) < 0)
+    {
+      vec_negate(&rotAxisI_m);
+      vec_negate(&attErrorReduced_m);
+    }
+  
+    quaternion_multiply(&attitude_m, &attErrorReduced_m, &attDesiredReduced_m);
+  
+    // TODO: Heuristic step dependent on current rotation direction?
+  
+    quaternion_normalize(&attErrorFull_m);
+    quaternion_normalize(&attErrorReduced_m);
+  
+  
+    // ====== FULL ATTITUDE CONTROL ======
+  
+    // compute the error angle between the inertial and the desired thrust directions
+    dotProd = vec_dot(&zI_m, &zI_des_m);
+    dotProd = constrain(dotProd, -1, 1);
+    alpha = acosf(dotProd);
+  
+    // the axis around which this rotation needs to occur in the inertial frame (ie. an axis orthogonal to the two)
+    if (fabsf(alpha) > 1 * ARCMINUTE)
+    {
+      vec_cross(&zI_m, &zI_des_m, &rotAxisI_m);
+      vec_normalize(&rotAxisI_m);
+    }
+    else
+    {
+      rotAxisI[0] = 1;
+      rotAxisI[1] = 1;
+      rotAxisI[2] = 0;
+    }
+  
+    // the quaternion corresponding to a roll and pitch around this axis
+    float attFullReqPitchRoll[4] = {0};
+    arm_matrix_instance_f32 attFullReqPitchRoll_m = {4, 1, attFullReqPitchRoll};
+    attFullReqPitchRoll[0] = cosf(alpha / 2.0f);
+    attFullReqPitchRoll[1] = sinf(alpha / 2.0f) * rotAxisI[0];
+    attFullReqPitchRoll[2] = sinf(alpha / 2.0f) * rotAxisI[1];
+    attFullReqPitchRoll[3] = sinf(alpha / 2.0f) * rotAxisI[2];
+  
+    // the quaternion corresponding to a rotation to the desired yaw
+    float attFullReqYaw[4] = {0};
+    arm_matrix_instance_f32 attFullReqYaw_m = {4, 1, attFullReqYaw};
+    attFullReqYaw[0] = cosf(ref.yaw / 2.0f);
+    attFullReqYaw[1] = 0;
+    attFullReqYaw[2] = 0;
+    attFullReqYaw[3] = sinf(ref.yaw / 2.0f);
+  
+    // the full rotation (roll & pitch, then yaw)
+    quaternion_multiply(&attFullReqPitchRoll_m, &attFullReqYaw_m, &attDesiredFull_m);
+  
+    // back transform from the current attitude to get the error between rotations
+    quaternion_multiply(&attitudeI_m, &attDesiredFull_m, &attErrorFull_m);
+  
+    // correct rotation
+    if (attErrorFull[0] < 0)
+    {
+      vec_negate(&attErrorFull_m);
+      quaternion_multiply(&attitude_m, &attErrorFull_m, &attDesiredFull_m);
+    }
+  
+    // TODO: Heuristic step dependent on current rotation direction?
+  
+    quaternion_normalize(&attErrorFull_m);
+    quaternion_normalize(&attDesiredFull_m);
+  
+  
+    // ====== MIXING FULL & REDUCED CONTROL ======
+    float mixingFactor = tau_rp / tau_yaw;
+  
+    float attError[4] = {0};
+    arm_matrix_instance_f32 attError_m = {4, 1, attError};
+  
+    if (mixingFactor <= 0)
+    {
+      // 100% reduced control (no yaw control)
+      memcpy(attError, attErrorReduced, sizeof(attError));
+    }
+    else if (mixingFactor >= 1)
+    {
+      // 100% full control (yaw controlled with same time constant as roll & pitch)
+      memcpy(attError, attErrorFull, sizeof(attError));
+    }
+    else
+    {
+      // mixture of reduced and full control
+    
+      // calculate rotation between the two errors
+      quaternion_inverse(&attErrorReduced_m, &temp1_m);
+      quaternion_multiply(&temp1_m, &attErrorFull_m, &temp2_m);
+      quaternion_normalize(&temp2_m);
+    
+      // by defintion this rotation has the form [cos(alpha/2), 0, 0, sin(alpha/2)]
+      // where the first element gives the rotation angle, and the last the direction
+      alpha = 2.0f * acosf(constrain(temp2[0], -1, 1));
+    
+      // bisect the rotation from reduced to full control
+      temp1[0] = cosf(alpha * mixingFactor / 2.0f);
+      temp1[1] = 0;
+      temp1[2] = 0;
+      temp1[3] = sinf(alpha * mixingFactor / 2.0f) * (temp2[3] < 0 ? -1 : 1); // rotate in the correct direction
+    
+      quaternion_multiply(&attErrorReduced_m, &temp1_m, &attError_m);
+      quaternion_normalize(&attError_m);
+    }
+  
+  
+    // ====== COMPUTE CONTROL SIGNALS ======
+  
+    // compute the commanded body rates
+    control->omega[0] = 2.0f / tau_rp * attError[1];
+    control->omega[1] = 2.0f / tau_rp * attError[2];
+    control->omega[2] = 2.0f / tau_rp * attError[3]; // due to the mixing, this will behave with time constant tau_yaw
+  
+    // scale the commands to satisfy rate constraints
+    float scaling = 1;
+    scaling = max(scaling, fabsf(control->omega[0]) / omega_rp_max);
+    scaling = max(scaling, fabsf(control->omega[1]) / omega_rp_max);
+    scaling = max(scaling, fabsf(control->omega[2]) / omega_yaw_max);
+  
+    control->omega[0] /= scaling;
+    control->omega[1] /= scaling;
+    control->omega[2] /= scaling;
+    control->thrust = collCmd;
+  
+  }
+  
+  // control the body torques
+  float omegaErr[3] = {(control->omega[0] - sensors->gyro.axis[0]*DEG_TO_RAD)/tau_rp_rate,
+                       (control->omega[1] - sensors->gyro.axis[1]*DEG_TO_RAD)/tau_rp_rate,
+                       (control->omega[2] - sensors->gyro.axis[2]*DEG_TO_RAD)/tau_yaw_rate};
+  arm_matrix_instance_f32 omegaErr_m = {3, 1, omegaErr};
+  arm_matrix_instance_f32 torques_m = {3, 1, control->torque};
+  
+  // update the commanded body torques based on the current error in body rates
+  mat_mult(&INERTIA_m, &omegaErr_m, &torques_m);
 }
 
 
@@ -181,57 +562,59 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
   if (header->packetHasExternalReference)
   {
     crtpControlPacketWithExternalPosition_t *packet = (crtpControlPacketWithExternalPosition_t*)pk->data;
-    ExternalPositionCache.externalPosition[!ExternalPositionCache.activeSide].x = half2single(packet->x.extPos);
-    ExternalPositionCache.externalPosition[!ExternalPositionCache.activeSide].y = half2single(packet->y.extPos);
-    ExternalPositionCache.externalPosition[!ExternalPositionCache.activeSide].z = half2single(packet->z.extPos);
-    ExternalPositionCache.externalPosition[!ExternalPositionCache.activeSide].stdDev = EXTERNAL_MEASUREMENT_STDDEV;
     
-    ExternalPositionCache.activeSide = !ExternalPositionCache.activeSide;
-    ExternalPositionCache.timestamp = xTaskGetTickCount();
-    
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.pos = half2single(packet->x.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.vel = half2single(packet->x.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.acc = half2single(packet->x.acc);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.mode = header->controlModeX;
+    positionMeasurement_t externalPosition;
+    externalPosition.x = half2single(packet->x.extPos);
+    externalPosition.y = half2single(packet->y.extPos);
+    externalPosition.z = half2single(packet->z.extPos);
+    externalPosition.stdDev = EXTERNAL_MEASUREMENT_STDDEV;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.pos = half2single(packet->y.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.vel = half2single(packet->y.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.acc = half2single(packet->y.acc);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.mode = header->controlModeY;
+    controlReference_t controlReference;
+    controlReference.x.pos = half2single(packet->x.pos);
+    controlReference.x.vel = half2single(packet->x.vel);
+    controlReference.x.acc = half2single(packet->x.acc);
+    controlReference.x.mode = header->controlModeX;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.pos = half2single(packet->z.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.vel = half2single(packet->z.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.acc = half2single(packet->z.acc);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.mode = header->controlModeZ;
-    
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].yaw = packet->yaw;
-    
-    ControlReferenceCache.activeSide = !ControlReferenceCache.activeSide;
-    ControlReferenceCache.timestamp = xTaskGetTickCount();
+    controlReference.y.pos = half2single(packet->y.pos);
+    controlReference.y.vel = half2single(packet->y.vel);
+    controlReference.y.acc = half2single(packet->y.acc);
+    controlReference.y.mode = header->controlModeY;
+  
+    controlReference.z.pos = half2single(packet->z.pos);
+    controlReference.z.vel = half2single(packet->z.vel);
+    controlReference.z.acc = half2single(packet->z.acc);
+    controlReference.z.mode = header->controlModeZ;
+  
+    controlReference.yaw = packet->yaw;
+  
+    xQueueOverwrite(externalPositionQueue, &externalPosition);
+    lastExternalPositionTimestamp = xTaskGetTickCount();
+    xQueueOverwrite(referenceQueue, &controlReference);
+    lastReferenceTimestamp = xTaskGetTickCount();
   }
   else
   {
     crtpControlPacket_t *packet = (crtpControlPacket_t *) pk->data;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.pos = half2single(packet->x.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.vel = half2single(packet->x.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.acc = packet->x.acc;
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].x.mode = header->controlModeX;
+    controlReference_t controlReference;
+    controlReference.x.pos = half2single(packet->x.pos);
+    controlReference.x.vel = half2single(packet->x.vel);
+    controlReference.x.acc = packet->x.acc;
+    controlReference.x.mode = header->controlModeX;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.pos = half2single(packet->y.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.vel = half2single(packet->y.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.acc = packet->y.acc;
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].y.mode = header->controlModeY;
+    controlReference.y.pos = half2single(packet->y.pos);
+    controlReference.y.vel = half2single(packet->y.vel);
+    controlReference.y.acc = packet->y.acc;
+    controlReference.y.mode = header->controlModeY;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.pos = half2single(packet->z.pos);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.vel = half2single(packet->z.vel);
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.acc = packet->z.acc;
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].z.mode = header->controlModeZ;
+    controlReference.z.pos = half2single(packet->z.pos);
+    controlReference.z.vel = half2single(packet->z.vel);
+    controlReference.z.acc = packet->z.acc;
+    controlReference.z.mode = header->controlModeZ;
   
-    ControlReferenceCache.controlReference[!ControlReferenceCache.activeSide].yaw = packet->yaw;
-  
-    ControlReferenceCache.activeSide = !ControlReferenceCache.activeSide;
-    ControlReferenceCache.timestamp = xTaskGetTickCount();
+    controlReference.yaw = packet->yaw;
+    xQueueOverwrite(referenceQueue, &controlReference);
+    lastReferenceTimestamp = xTaskGetTickCount();
   }
 }
 
@@ -239,13 +622,13 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
 void stateControllerUpdateStateWithExternalPosition()
 {
   // Only use position information if it's valid and recent
-  if ((xTaskGetTickCount() - ExternalPositionCache.timestamp) < M2T(5)) {
+  if ((xTaskGetTickCount() - lastExternalPositionTimestamp) < M2T(5)) {
     // Get the updated position from the mocap
-    ext_pos.x = ExternalPositionCache.externalPosition[ExternalPositionCache.activeSide].x;
-    ext_pos.y = ExternalPositionCache.externalPosition[ExternalPositionCache.activeSide].y;
-    ext_pos.z = ExternalPositionCache.externalPosition[ExternalPositionCache.activeSide].z;
-    ext_pos.stdDev = 0.01;
-    stateEstimatorEnqueuePosition(&ext_pos);
+    positionMeasurement_t externalPosition;
+    if (pdTRUE == xQueueReceive(externalPositionQueue, &externalPosition, 0))
+    {
+      stateEstimatorEnqueuePosition(&externalPosition);
+    }
   }
 }
 
@@ -256,4 +639,19 @@ LOG_GROUP_START(ext_pos)
   LOG_ADD(LOG_FLOAT, Y, &ext_pos.y)
   LOG_ADD(LOG_FLOAT, Z, &ext_pos.z)
 LOG_GROUP_STOP(ext_pos)
+
+PARAM_GROUP_START(ctrlr)
+PARAM_ADD(PARAM_FLOAT, tau_xy, &tau_xy)
+PARAM_ADD(PARAM_FLOAT, zeta_xy, &zeta_xy)
+PARAM_ADD(PARAM_FLOAT, tau_z, &tau_z)
+PARAM_ADD(PARAM_FLOAT, zeta_z, &zeta_z)
+PARAM_ADD(PARAM_FLOAT, tau_rp, &tau_rp)
+PARAM_ADD(PARAM_FLOAT, tau_yaw, &tau_yaw)
+PARAM_ADD(PARAM_FLOAT, tau_rp_rate, &tau_rp_rate)
+PARAM_ADD(PARAM_FLOAT, tau_yaw_rate, &tau_yaw_rate)
+PARAM_ADD(PARAM_FLOAT, coll_min, &coll_min)
+PARAM_ADD(PARAM_FLOAT, coll_max, &coll_max)
+PARAM_ADD(PARAM_FLOAT, omega_rp_max, &omega_rp_max)
+PARAM_ADD(PARAM_FLOAT, omega_yaw_max, &omega_yaw_max)
+PARAM_GROUP_STOP(ctrlr)
 
