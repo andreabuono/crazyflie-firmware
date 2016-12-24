@@ -72,11 +72,14 @@ static float zeta_xy = 0.2f;
 static float tau_z = 0.5f;
 static float zeta_z = 0.75f;
 
+static float thrust_reduction_fairness = 0; // 1 -> even reduction across x, y, z, 0 -> z gets what it wants
+
 static float tau_rp = 0.2f;
-static float tau_yaw = 0.5f;
+static float mixing_factor = 0.4f;
 
 static float tau_rp_rate = 0.01f;
 static float tau_yaw_rate = 0.1f;
+static float igain_rate = 0.01f;
 
 static float coll_min = 0.5f*GRAVITY;
 static float coll_max = 1.5f*GRAVITY;
@@ -223,17 +226,27 @@ void stateControllerInit(void)
   externalPositionQueue = xQueueCreate(1, sizeof(positionMeasurement_t));
   referenceQueue = xQueueCreate(1, sizeof(controlReference_t));
   
-  crtpRegisterPortCB(CRTP_PORT_POSITION, stateControllerCrtpCB);
+  crtpRegisterPortCB(CRTP_PORT_CONTROL, stateControllerCrtpCB);
   
   isInit = true;
 }
 
 static controlReference_t ref;
+static float omegaIntegrators[3];
 static uint32_t lastControlUpdate;
 #define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
 {
+//  float dt1 = (float)(xTaskGetTickCount()%M2T(2000))/(float)(M2T(2000));
+//  float dt2 = (float)(xTaskGetTickCount()%M2T(4000))/(float)(M2T(4000));
+//  float dt3 = (float)(xTaskGetTickCount()%M2T(8000))/(float)(M2T(8000));
+//  float dt4 = (float)(xTaskGetTickCount()%M2T(16000))/(float)(M2T(16000));
+//  ref.x = (controlReferenceAxis_t){0b001,0,0,-0.1f+0.2f*dt1};
+//  ref.y = (controlReferenceAxis_t){0b001,0,0,-0.1f+0.2f*dt2};
+//  ref.z = (controlReferenceAxis_t){0b001,0,0,-5.0f+10.0f*dt3};
+//  ref.yaw = 0;
+  
   uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
   if (ticksSinceLastCommand > M2T(100)) { // require commands at 10Hz
     control->enable = false;
@@ -251,16 +264,19 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     else if (ref.resetEmergency)
     {
       control->enable = true;
+      omegaIntegrators[0] = omegaIntegrators[1] = omegaIntegrators[2] = 0;
     }
+  }
   
-    if (!control->enable)
-    {
-      return;
-    }
+  if (!control->enable)
+  {
+    return;
   }
   
   if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE) // update at the CONTROL_RATE
   {
+    lastControlUpdate = xTaskGetTickCount();
+    
     // desired accelerations
     float accDes[3] = {0};
     arm_matrix_instance_f32 accDes_m = {3, 1, accDes};
@@ -319,48 +335,74 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     R[2][2] = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
   
     // compute the position and velocity errors
-    float pError[] = {ref.x.pos - state->position.x,
-                      ref.y.pos - state->position.y,
-                      ref.z.pos - state->position.z};
+    float pError[] = {ref.x[0] - state->position.x,
+                      ref.y[0] - state->position.y,
+                      ref.z[0] - state->position.z};
   
-    float vError[] = {ref.x.vel - state->velocity.x,
-                      ref.y.vel - state->velocity.y,
-                      ref.z.vel - state->velocity.z};
+    float vError[] = {ref.x[1] - state->velocity.x,
+                      ref.y[1] - state->velocity.y,
+                      ref.z[1] - state->velocity.z};
   
   
     // ====== LINEAR CONTROL ======
   
     // compute desired accelerations in X, Y and Z
     accDes[0] = 0;
-    if (CONTROLMODE_POSITION(ref.x.mode))
-    { accDes[0] += 1 / tau_xy / tau_xy * pError[0]; }
-    if (CONTROLMODE_VELOCITY(ref.x.mode))
-    { accDes[0] += 2 * zeta_xy / tau_xy * vError[0]; }
-    if (CONTROLMODE_ACCELERATION(ref.x.mode))
-    { accDes[0] += ref.x.acc; }
+    if (CONTROLMODE_POSITION(ref.xmode))
+    { accDes[0] += 1.0f / tau_xy / tau_xy * pError[0]; }
+    if (CONTROLMODE_VELOCITY(ref.xmode))
+    { accDes[0] += 2.0f * zeta_xy / tau_xy * vError[0]; }
+    if (CONTROLMODE_ACCELERATION(ref.xmode))
+    { accDes[0] += ref.x[2]; }
+    accDes[0] = constrain(accDes[0], -coll_max, coll_max);
   
     accDes[1] = 0;
-    if (CONTROLMODE_POSITION(ref.y.mode))
-    { accDes[1] += 1 / tau_xy / tau_xy * pError[1]; }
-    if (CONTROLMODE_VELOCITY(ref.y.mode))
-    { accDes[1] += 2 * zeta_xy / tau_xy * vError[1]; }
-    if (CONTROLMODE_ACCELERATION(ref.y.mode))
-    { accDes[1] += ref.y.acc; }
+    if (CONTROLMODE_POSITION(ref.ymode))
+    { accDes[1] += 1.0f / tau_xy / tau_xy * pError[1]; }
+    if (CONTROLMODE_VELOCITY(ref.ymode))
+    { accDes[1] += 2.0f * zeta_xy / tau_xy * vError[1]; }
+    if (CONTROLMODE_ACCELERATION(ref.ymode))
+    { accDes[1] += ref.y[2]; }
+    accDes[1] = constrain(accDes[1], -coll_max, coll_max);
   
     accDes[2] = GRAVITY;
-    if (CONTROLMODE_POSITION(ref.z.mode))
-    { accDes[2] += 1 / tau_z / tau_z * pError[2]; }
-    if (CONTROLMODE_VELOCITY(ref.z.mode))
-    { accDes[2] += 2 * zeta_z / tau_z * vError[2]; }
-    if (CONTROLMODE_ACCELERATION(ref.z.mode))
-    { accDes[2] += ref.z.acc; }
+    if (CONTROLMODE_POSITION(ref.zmode))
+    { accDes[2] += 1.0f / tau_z / tau_z * pError[2]; }
+    if (CONTROLMODE_VELOCITY(ref.zmode))
+    { accDes[2] += 2.0f * zeta_z / tau_z * vError[2]; }
+    if (CONTROLMODE_ACCELERATION(ref.zmode))
+    { accDes[2] += ref.z[2]; }
+    accDes[2] = constrain(accDes[2], -coll_max, coll_max);
   
   
     // ====== THRUST CONTROL ======
   
     // compute commanded thrust required to achieve the z acceleration
     collCmd = accDes[2] / R[2][2];
-    collCmd = constrain(collCmd, coll_min, coll_max);
+    
+    if (collCmd > coll_max) {
+      // exceeding the thrust threshold
+      // we compute a reduction factor r based on fairness f \in [0,1] such that:
+      // collMax^2 = (r*x)^2 + (r*y)^2 + (r*f*z + (1-f)z + g)^2
+      float x = accDes[0];
+      float y = accDes[1];
+      float z = accDes[2] - GRAVITY;
+      float g = GRAVITY;
+      float f = constrain(thrust_reduction_fairness, 0, 1);
+      
+      // solve as a quadratic
+      float a = powf(x, 2) + powf(y, 2) + powf(z*f, 2);
+      float b = 2 * z*f*((1-f)*z + g);
+      float c = powf((1-f)*z + g, 2) - powf(coll_max, 2);
+      
+      float r = (-b + arm_sqrt(powf(b, 2) - 4.0f*a*c))/(2.0f*a);
+      r = constrain(r,0,1);
+      
+      accDes[0] = r*x;
+      accDes[1] = r*y;
+      accDes[2] = (r*f+(1-f))*z + g;
+    }
+    collCmd = constrain(accDes[2] / R[2][2], coll_min, coll_max);
   
     // FYI: this thrust will result in the accelerations
     // xdd = R02*coll
@@ -459,10 +501,10 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     // the quaternion corresponding to a rotation to the desired yaw
     float attFullReqYaw[4] = {0};
     arm_matrix_instance_f32 attFullReqYaw_m = {4, 1, attFullReqYaw};
-    attFullReqYaw[0] = cosf(ref.yaw / 2.0f);
+    attFullReqYaw[0] = cosf(ref.yaw[0] / 2.0f);
     attFullReqYaw[1] = 0;
     attFullReqYaw[2] = 0;
-    attFullReqYaw[3] = sinf(ref.yaw / 2.0f);
+    attFullReqYaw[3] = sinf(ref.yaw[0] / 2.0f);
   
     // the full rotation (roll & pitch, then yaw)
     quaternion_multiply(&attFullReqPitchRoll_m, &attFullReqYaw_m, &attDesiredFull_m);
@@ -484,17 +526,16 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   
   
     // ====== MIXING FULL & REDUCED CONTROL ======
-    float mixingFactor = tau_rp / tau_yaw;
-  
+ 
     float attError[4] = {0};
     arm_matrix_instance_f32 attError_m = {4, 1, attError};
   
-    if (mixingFactor <= 0)
+    if (mixing_factor <= 0)
     {
       // 100% reduced control (no yaw control)
       memcpy(attError, attErrorReduced, sizeof(attError));
     }
-    else if (mixingFactor >= 1)
+    else if (mixing_factor >= 1)
     {
       // 100% full control (yaw controlled with same time constant as roll & pitch)
       memcpy(attError, attErrorFull, sizeof(attError));
@@ -513,22 +554,22 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       alpha = 2.0f * acosf(constrain(temp2[0], -1, 1));
     
       // bisect the rotation from reduced to full control
-      temp1[0] = cosf(alpha * mixingFactor / 2.0f);
+      temp1[0] = cosf(alpha * mixing_factor / 2.0f);
       temp1[1] = 0;
       temp1[2] = 0;
-      temp1[3] = sinf(alpha * mixingFactor / 2.0f) * (temp2[3] < 0 ? -1 : 1); // rotate in the correct direction
-    
+      temp1[3] = sinf(alpha * mixing_factor / 2.0f) * (temp2[3] < 0 ? -1 : 1); // rotate in the correct direction
+      
       quaternion_multiply(&attErrorReduced_m, &temp1_m, &attError_m);
       quaternion_normalize(&attError_m);
     }
   
   
     // ====== COMPUTE CONTROL SIGNALS ======
-  
+      
     // compute the commanded body rates
     control->omega[0] = 2.0f / tau_rp * attError[1];
     control->omega[1] = 2.0f / tau_rp * attError[2];
-    control->omega[2] = 2.0f / tau_rp * attError[3]; // due to the mixing, this will behave with time constant tau_yaw
+    control->omega[2] = 2.0f / tau_rp * attError[3] + ref.yaw[1]; // due to the mixing, this will behave with time constant tau_yaw
   
     // scale the commands to satisfy rate constraints
     float scaling = 1;
@@ -540,13 +581,23 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     control->omega[1] /= scaling;
     control->omega[2] /= scaling;
     control->thrust = collCmd;
-  
   }
   
   // control the body torques
   float omegaErr[3] = {(control->omega[0] - sensors->gyro.axis[0]*DEG_TO_RAD)/tau_rp_rate,
                        (control->omega[1] - sensors->gyro.axis[1]*DEG_TO_RAD)/tau_rp_rate,
                        (control->omega[2] - sensors->gyro.axis[2]*DEG_TO_RAD)/tau_yaw_rate};
+  
+  if (igain_rate > 0)
+  {
+    for (int i = 0; i < 3; i++)
+    {
+      omegaIntegrators[i] = (1.0f - igain_rate) * omegaIntegrators[i] + igain_rate * omegaErr[i];
+      omegaErr[i] += omegaIntegrators[i];
+    }
+  }
+    
+  
   arm_matrix_instance_f32 omegaErr_m = {3, 1, omegaErr};
   arm_matrix_instance_f32 torques_m = {3, 1, control->torque};
   
@@ -564,29 +615,23 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
     crtpControlPacketWithExternalPosition_t *packet = (crtpControlPacketWithExternalPosition_t*)pk->data;
     
     positionMeasurement_t externalPosition;
-    externalPosition.x = half2single(packet->x.extPos);
-    externalPosition.y = half2single(packet->y.extPos);
-    externalPosition.z = half2single(packet->z.extPos);
+    externalPosition.x = half2single(packet->x[3]);
+    externalPosition.y = half2single(packet->y[3]);
+    externalPosition.z = half2single(packet->z[3]);
     externalPosition.stdDev = EXTERNAL_MEASUREMENT_STDDEV;
   
     controlReference_t controlReference;
-    controlReference.x.pos = half2single(packet->x.pos);
-    controlReference.x.vel = half2single(packet->x.vel);
-    controlReference.x.acc = half2single(packet->x.acc);
-    controlReference.x.mode = header->controlModeX;
+    controlReference.xmode = header->controlModeX;
+    controlReference.ymode = header->controlModeY;
+    controlReference.zmode = header->controlModeZ;
+    controlReference.setEmergency = packet->header.setEmergency;
+    controlReference.resetEmergency = packet->header.resetEmergency;
   
-    controlReference.y.pos = half2single(packet->y.pos);
-    controlReference.y.vel = half2single(packet->y.vel);
-    controlReference.y.acc = half2single(packet->y.acc);
-    controlReference.y.mode = header->controlModeY;
-  
-    controlReference.z.pos = half2single(packet->z.pos);
-    controlReference.z.vel = half2single(packet->z.vel);
-    controlReference.z.acc = half2single(packet->z.acc);
-    controlReference.z.mode = header->controlModeZ;
-  
-    controlReference.yaw = packet->yaw;
-  
+    for (int i = 0; i<3; i++) { controlReference.x[i] = half2single(packet->x[i]); }
+    for (int i = 0; i<3; i++) { controlReference.y[i] = half2single(packet->y[i]); }
+    for (int i = 0; i<3; i++) { controlReference.z[i] = half2single(packet->z[i]); }
+    for (int i = 0; i<2; i++) { controlReference.yaw[i] = half2single(packet->yaw[i]); }
+    
     xQueueOverwrite(externalPositionQueue, &externalPosition);
     lastExternalPositionTimestamp = xTaskGetTickCount();
     xQueueOverwrite(referenceQueue, &controlReference);
@@ -597,22 +642,17 @@ static void stateControllerCrtpCB(CRTPPacket* pk)
     crtpControlPacket_t *packet = (crtpControlPacket_t *) pk->data;
   
     controlReference_t controlReference;
-    controlReference.x.pos = half2single(packet->x.pos);
-    controlReference.x.vel = half2single(packet->x.vel);
-    controlReference.x.acc = packet->x.acc;
-    controlReference.x.mode = header->controlModeX;
+    controlReference.xmode = header->controlModeX;
+    controlReference.ymode = header->controlModeY;
+    controlReference.zmode = header->controlModeZ;
+    controlReference.setEmergency = packet->header.setEmergency;
+    controlReference.resetEmergency = packet->header.resetEmergency;
   
-    controlReference.y.pos = half2single(packet->y.pos);
-    controlReference.y.vel = half2single(packet->y.vel);
-    controlReference.y.acc = packet->y.acc;
-    controlReference.y.mode = header->controlModeY;
+    for (int i = 0; i<3; i++) { controlReference.x[i] = half2single(packet->x[i]); }
+    for (int i = 0; i<3; i++) { controlReference.y[i] = half2single(packet->y[i]); }
+    for (int i = 0; i<3; i++) { controlReference.z[i] = half2single(packet->z[i]); }
+    for (int i = 0; i<2; i++) { controlReference.yaw[i] = half2single(packet->yaw[i]); }
   
-    controlReference.z.pos = half2single(packet->z.pos);
-    controlReference.z.vel = half2single(packet->z.vel);
-    controlReference.z.acc = packet->z.acc;
-    controlReference.z.mode = header->controlModeZ;
-  
-    controlReference.yaw = packet->yaw;
     xQueueOverwrite(referenceQueue, &controlReference);
     lastReferenceTimestamp = xTaskGetTickCount();
   }
@@ -646,7 +686,8 @@ PARAM_ADD(PARAM_FLOAT, zeta_xy, &zeta_xy)
 PARAM_ADD(PARAM_FLOAT, tau_z, &tau_z)
 PARAM_ADD(PARAM_FLOAT, zeta_z, &zeta_z)
 PARAM_ADD(PARAM_FLOAT, tau_rp, &tau_rp)
-PARAM_ADD(PARAM_FLOAT, tau_yaw, &tau_yaw)
+PARAM_ADD(PARAM_FLOAT, mixing_factor, &mixing_factor)
+PARAM_ADD(PARAM_FLOAT, coll_fairness, &thrust_reduction_fairness)
 PARAM_ADD(PARAM_FLOAT, tau_rp_rate, &tau_rp_rate)
 PARAM_ADD(PARAM_FLOAT, tau_yaw_rate, &tau_yaw_rate)
 PARAM_ADD(PARAM_FLOAT, coll_min, &coll_min)

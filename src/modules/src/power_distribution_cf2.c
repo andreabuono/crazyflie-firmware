@@ -55,6 +55,7 @@ static inline float arm_sqrt(float32_t in)
 { float pOut = 0; arm_status result = arm_sqrt_f32(in, &pOut); configASSERT(ARM_MATH_SUCCESS == result); return pOut; }
 
 static float motor_pwm[4] = {0};
+static float RollForce, PitchForce, YawForce, ThrustForce;
 
 void powerDistributionInit(void)
 {
@@ -83,17 +84,17 @@ void powerDistribution(const control_t *control)
   }
   
   float motor_forces[4] = {0};
-  float Tpart = control->thrust * CRAZYFLIE_MASS; // force to provide control->thrust
-  float Zpart = control->torque[2] / THRUST_TO_TORQUE_m; // force to provide z torque
+  ThrustForce = control->thrust * CRAZYFLIE_MASS; // force to provide control->thrust
+  YawForce = control->torque[2] / THRUST_TO_TORQUE_m; // force to provide z torque
   
   #ifdef QUAD_FORMATION_X
-  float Xpart = control->torque[0] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide x torque
-  float Ypart = control->torque[1] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide y torque
+  RollForce =  control->torque[0] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide x torque
+  PitchForce = control->torque[1] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide y torque
   
-  motor_forces[0] = Tpart/4.0f - Xpart/4.0f - Ypart/4.0f + Zpart/4.0f;
-  motor_forces[1] = Tpart/4.0f - Xpart/4.0f + Ypart/4.0f - Zpart/4.0f;
-  motor_forces[2] = Tpart/4.0f + Xpart/4.0f + Ypart/4.0f + Zpart/4.0f;
-  motor_forces[3] = Tpart/4.0f + Xpart/4.0f - Ypart/4.0f - Zpart/4.0f;
+  motor_forces[0] = ThrustForce/4.0f - RollForce/4.0f - PitchForce/4.0f - YawForce/4.0f;
+  motor_forces[1] = ThrustForce/4.0f - RollForce/4.0f + PitchForce/4.0f + YawForce/4.0f;
+  motor_forces[2] = ThrustForce/4.0f + RollForce/4.0f + PitchForce/4.0f - YawForce/4.0f;
+  motor_forces[3] = ThrustForce/4.0f + RollForce/4.0f - PitchForce/4.0f + YawForce/4.0f;
     
   #else // QUAD_FORMATION_NORMAL
     motorPower.m1 = limitThrust(control->thrust + control->pitch +
@@ -116,7 +117,7 @@ void powerDistribution(const control_t *control)
       motor_pwm[i] = constrain(motor_pwm[i], 0.1, 1);
     }
     
-    motorsSetRatio(i, (uint16_t)(65536.0f*motor_pwm[i]/10.0f));
+    motorsSetRatio(i, (uint16_t)(65535*motor_pwm[i]));
   }
 }
 
@@ -125,4 +126,8 @@ LOG_ADD(LOG_FLOAT, m1, &motor_pwm[0])
 LOG_ADD(LOG_FLOAT, m2, &motor_pwm[1])
 LOG_ADD(LOG_FLOAT, m3, &motor_pwm[2])
 LOG_ADD(LOG_FLOAT, m4, &motor_pwm[3])
+LOG_ADD(LOG_FLOAT, fRoll, &RollForce)
+LOG_ADD(LOG_FLOAT, fPitch, &PitchForce)
+LOG_ADD(LOG_FLOAT, fYaw, &YawForce)
+LOG_ADD(LOG_FLOAT, fThrust, &ThrustForce)
 LOG_GROUP_STOP(motorpwm)

@@ -32,33 +32,14 @@ void stateControllerUpdateStateWithExternalPosition();
 #define CONTROLMODE_POSITION(mode)     ((0b100 & mode) != 0)
 
 typedef struct {
-  uint8_t mode;
-  float pos;
-  float vel;
-  float acc;
-} controlReferenceAxis_t;
-
-typedef struct {
   bool setEmergency;
   bool resetEmergency;
-  controlReferenceAxis_t x;
-  controlReferenceAxis_t y;
-  controlReferenceAxis_t z;
-  float yaw;
+  uint8_t xmode, ymode, zmode;
+  float x[3];
+  float y[3];
+  float z[3];
+  float yaw[2];
 } controlReference_t;
-
-typedef struct {
-  uint16_t pos; // use uint16_t to hold float16_t
-  uint16_t vel; // use uint16_t to hold float16_t
-  float acc;
-} __attribute__((packed)) crtpControlReference_t;
-
-typedef struct {
-  uint16_t pos; // use uint16_t to hold float16_t
-  uint16_t vel; // use uint16_t to hold float16_t
-  uint16_t acc; // use uint16_t to hold float16_t
-  uint16_t extPos; // use uint16_t to hold float16_t
-} __attribute__((packed)) crtpControlReferenceWithExternalPosition_t;
 
 typedef struct {
   uint16_t packetHasExternalReference:1;
@@ -73,17 +54,17 @@ typedef struct {
 typedef struct
 {
   crtpControlPacketHeader_t header; // size 2
-  crtpControlReference_t x; // size 8
-  crtpControlReference_t y; // size 8
-  crtpControlReference_t z; // size 8
-  float yaw;
+  uint16_t x[3];
+  uint16_t y[3];
+  uint16_t z[3];
+  uint16_t yaw[2];
 } __attribute__((packed)) crtpControlPacket_t;
 
 typedef struct
 {
-  crtpControlPacketHeader_t header;
-  crtpControlReferenceWithExternalPosition_t x;
-  crtpControlReferenceWithExternalPosition_t y;
-  crtpControlReferenceWithExternalPosition_t z;
-  float yaw;
+  crtpControlPacketHeader_t header; // size 2
+  uint16_t x[4];
+  uint16_t y[4];
+  uint16_t z[4];
+  uint16_t yaw[2];
 } __attribute__((packed)) crtpControlPacketWithExternalPosition_t;
