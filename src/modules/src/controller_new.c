@@ -38,7 +38,6 @@
  * ============================================================================
  */
 
-#include <modules/interface/controller_new.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -66,25 +65,37 @@ static float INERTIA[3][3] =
      {0.72e-6f, 1.8e-6f, 29.3e-6f}}; // from Julian Förster's System Identification of a Crazyflie
 static arm_matrix_instance_f32 INERTIA_m = {3, 3, (float*)INERTIA};
 
+static float thrust_reduction_fairness = 0.0; // 1 -> even reduction across x, y, z, 0 -> z gets what it wants
+static float mixing_factor = 1.0;
+
+static float tau_xy = 0.3;
+static float zeta_xy = 0.65;
+
+static float tau_z = 0.2;
+static float zeta_z = 0.55;
+
+static float tau_rp = 0.25;
+
+static float tau_rp_rate = 0.015;
+static float tau_yaw_rate = 0.0075;
+
+static float coll_min = 5;
+static float coll_max = 15;
+
+static float omega_rp_max = 30;
+static float omega_yaw_max = 30;
+
 static float tau_xy = 0.5f;
 static float zeta_xy = 0.2f;
 
 static float tau_z = 0.5f;
 static float zeta_z = 0.75f;
 
-static float thrust_reduction_fairness = 0; // 1 -> even reduction across x, y, z, 0 -> z gets what it wants
+static float igain_yaw = 0.01f;
+static float imax_yaw = 1.0f;
+static float igain_rate = 0.001f;
 
-static float tau_rp = 0.2f;
-static float mixing_factor = 0.4f;
 
-static float tau_rp_rate = 0.01f;
-static float tau_yaw_rate = 0.1f;
-static float igain_rate = 0.01f;
-
-static float coll_min = 0.5f*GRAVITY;
-static float coll_max = 1.5f*GRAVITY;
-static float omega_rp_max = 30;
-static float omega_yaw_max = 10;
 
 static inline void mat_trans(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
 { configASSERT(ARM_MATH_SUCCESS == arm_mat_trans_f32(pSrc, pDst)); }
@@ -233,20 +244,12 @@ void stateControllerInit(void)
 
 static controlReference_t ref;
 static float omegaIntegrators[3];
+static float yawIntegrator;
 static uint32_t lastControlUpdate;
 #define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
-{
-//  float dt1 = (float)(xTaskGetTickCount()%M2T(2000))/(float)(M2T(2000));
-//  float dt2 = (float)(xTaskGetTickCount()%M2T(4000))/(float)(M2T(4000));
-//  float dt3 = (float)(xTaskGetTickCount()%M2T(8000))/(float)(M2T(8000));
-//  float dt4 = (float)(xTaskGetTickCount()%M2T(16000))/(float)(M2T(16000));
-//  ref.x = (controlReferenceAxis_t){0b001,0,0,-0.1f+0.2f*dt1};
-//  ref.y = (controlReferenceAxis_t){0b001,0,0,-0.1f+0.2f*dt2};
-//  ref.z = (controlReferenceAxis_t){0b001,0,0,-5.0f+10.0f*dt3};
-//  ref.yaw = 0;
-  
+{  
   uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
   if (ticksSinceLastCommand > M2T(100)) { // require commands at 10Hz
     control->enable = false;
@@ -309,18 +312,11 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     arm_matrix_instance_f32 attitudeI_m = {4, 1, qI};
     quaternion_inverse(&attitude_m, &attitudeI_m);
   
-    // a few temporary quaternions
-    float temp1[4] = {0};
-    arm_matrix_instance_f32 temp1_m = {4, 1, temp1};
-  
-    float temp2[4] = {0};
-    arm_matrix_instance_f32 temp2_m = {4, 1, temp2};
-  
-  
-  
+    float omega[3] = {sensors->gyro.x * DEG_TO_RAD, sensors->gyro.y * DEG_TO_RAD, sensors->gyro.z * DEG_TO_RAD};
+    arm_matrix_instance_f32 omega_m = {3, 1, omega};
+    
     // body frame -> inertial frame :  vI = R*vB
     static float R[3][3] = {0};
-    arm_matrix_instance_f32 R_m = {3, 3, (float *) R};
   
     R[0][0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
     R[0][1] = 2 * q[1] * q[2] - 2 * q[0] * q[3];
@@ -333,7 +329,14 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     R[2][0] = 2 * q[1] * q[3] - 2 * q[0] * q[2];
     R[2][1] = 2 * q[2] * q[3] + 2 * q[0] * q[1];
     R[2][2] = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
+    
+    // a few temporary quaternions
+    float temp1[4] = {0};
+    arm_matrix_instance_f32 temp1_m = {4, 1, temp1};
   
+    float temp2[4] = {0};
+    arm_matrix_instance_f32 temp2_m = {4, 1, temp2};
+    
     // compute the position and velocity errors
     float pError[] = {ref.x[0] - state->position.x,
                       ref.y[0] - state->position.y,
@@ -455,19 +458,18 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   
     // choose the shorter rotation
     if (sinf(alpha / 2.0f) < 0)
-    { vec_negate(&rotAxisI_m); }
+    {
+      vec_negate(&rotAxisI_m);
+    }
     if (cosf(alpha / 2.0f) < 0)
     {
       vec_negate(&rotAxisI_m);
       vec_negate(&attErrorReduced_m);
     }
-  
+    
     quaternion_multiply(&attitude_m, &attErrorReduced_m, &attDesiredReduced_m);
-  
-    // TODO: Heuristic step dependent on current rotation direction?
-  
-    quaternion_normalize(&attErrorFull_m);
     quaternion_normalize(&attErrorReduced_m);
+    quaternion_normalize(&attDesiredReduced_m);
   
   
     // ====== FULL ATTITUDE CONTROL ======
@@ -519,8 +521,6 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       quaternion_multiply(&attitude_m, &attErrorFull_m, &attDesiredFull_m);
     }
   
-    // TODO: Heuristic step dependent on current rotation direction?
-  
     quaternion_normalize(&attErrorFull_m);
     quaternion_normalize(&attDesiredFull_m);
   
@@ -563,6 +563,8 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       quaternion_normalize(&attError_m);
     }
   
+    // TODO: Heuristic for yaw rotation direction based on current rotation axis & speed?
+  
   
     // ====== COMPUTE CONTROL SIGNALS ======
       
@@ -571,6 +573,12 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     control->omega[1] = 2.0f / tau_rp * attError[2];
     control->omega[2] = 2.0f / tau_rp * attError[3] + ref.yaw[1]; // due to the mixing, this will behave with time constant tau_yaw
   
+    if (igain_yaw > 0)
+    {
+      yawIntegrator = constrain((1.0f - igain_yaw) * yawIntegrator + igain_yaw * attError[3], -imax_yaw, imax_yaw);
+      control->omega[2] += yawIntegrator;
+    }
+    
     // scale the commands to satisfy rate constraints
     float scaling = 1;
     scaling = max(scaling, fabsf(control->omega[0]) / omega_rp_max);
