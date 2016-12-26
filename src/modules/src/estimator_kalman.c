@@ -191,13 +191,13 @@ static const float stdDevInitialAttitude_rollpitch = 0.01;
 static const float stdDevInitialAttitude_yaw = 0.1;
 
 static float procNoiseAcc_xy = 0.5f;
-static float procNoiseAcc_z = 1.0f;
+static float procNoiseAcc_z = 1.5f;
 static float procNoiseVel = 0;
 static float procNoisePos = 0;
 static float procNoiseAtt = 0;
 static float measNoiseBaro = 2.0f; // meters
 static float measNoiseGyro_rollpitch = 0.1f; // radians per second
-static float measNoiseGyro_yaw = 0.1f; // radians per second
+static float measNoiseGyro_yaw = 0.25f; // radians per second
 
 // We track a TDOA skew as part of the Kalman filter
 static const float stdDevInitialSkew = 0.1;

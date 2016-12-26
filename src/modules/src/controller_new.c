@@ -85,12 +85,6 @@ static float coll_max = 15;
 static float omega_rp_max = 30;
 static float omega_yaw_max = 30;
 
-static float tau_xy = 0.5f;
-static float zeta_xy = 0.2f;
-
-static float tau_z = 0.5f;
-static float zeta_z = 0.75f;
-
 static float igain_yaw = 0.01f;
 static float imax_yaw = 1.0f;
 static float igain_rate = 0.001f;
@@ -155,7 +149,6 @@ static inline float vec_dot(const arm_matrix_instance_f32 *pSrcA, const arm_matr
 }
 
 static inline void vec_cross(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB, arm_matrix_instance_f32 *pDst) {
-  float32_t s = 0;
   configASSERT( pSrcA->numCols == 1 );
   configASSERT( pSrcB->numCols == 1 );
   configASSERT( pDst->numCols == 1 );
@@ -275,16 +268,22 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   {
     return;
   }
+
+  // define this here, since we do body-rate control at 1000Hz below the following if statement
+  float omega[3] = {0};
+  omega[0] = sensors->gyro.x * DEG_TO_RAD;
+  omega[1] = sensors->gyro.y * DEG_TO_RAD;
+  omega[2] = sensors->gyro.z * DEG_TO_RAD;
   
-  if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE) // update at the CONTROL_RATE
+  // update at the CONTROL_RATE (100Hz)
+  if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE)
   {
     lastControlUpdate = xTaskGetTickCount();
     
     // desired accelerations
-    float accDes[3] = {0};
-    arm_matrix_instance_f32 accDes_m = {3, 1, accDes};
-  
-    float collCmd = 0; // desired thrust
+    float accDes[3] = {0};  
+    // desired thrust
+    float collCmd = 0;
   
     // attitude error as computed by the reduced attitude controller
     float attErrorReduced[4] = {0};
@@ -311,12 +310,9 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     float qI[4] = {0};
     arm_matrix_instance_f32 attitudeI_m = {4, 1, qI};
     quaternion_inverse(&attitude_m, &attitudeI_m);
-  
-    float omega[3] = {sensors->gyro.x * DEG_TO_RAD, sensors->gyro.y * DEG_TO_RAD, sensors->gyro.z * DEG_TO_RAD};
-    arm_matrix_instance_f32 omega_m = {3, 1, omega};
     
     // body frame -> inertial frame :  vI = R*vB
-    static float R[3][3] = {0};
+    float R[3][3] = {0};
   
     R[0][0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
     R[0][1] = 2 * q[1] * q[2] - 2 * q[0] * q[3];
@@ -412,7 +408,6 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     // ydd = R12*coll
   
     // a unit vector pointing in the direction of the desired thrust (ie. the direction of body's z axis in the inertial frame)
-    float magAcc = vec_norm(&accDes_m);
     float zI_des[3] = {accDes[0], accDes[1], accDes[2]};
     arm_matrix_instance_f32 zI_des_m = {3, 1, zI_des};
     vec_normalize(&zI_des_m);
@@ -592,9 +587,9 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   }
   
   // control the body torques
-  float omegaErr[3] = {(control->omega[0] - sensors->gyro.axis[0]*DEG_TO_RAD)/tau_rp_rate,
-                       (control->omega[1] - sensors->gyro.axis[1]*DEG_TO_RAD)/tau_rp_rate,
-                       (control->omega[2] - sensors->gyro.axis[2]*DEG_TO_RAD)/tau_yaw_rate};
+  float omegaErr[3] = {(control->omega[0] - omega[0])/tau_rp_rate,
+                       (control->omega[1] - omega[1])/tau_rp_rate,
+                       (control->omega[2] - omega[2])/tau_yaw_rate};
   
   if (igain_rate > 0)
   {
