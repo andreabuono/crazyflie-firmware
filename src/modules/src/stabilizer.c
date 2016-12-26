@@ -129,7 +129,7 @@ static void stabilizerTask(void* param)
 #endif
     
 #ifdef CONTROLLER_TYPE_new
-//    stateControllerUpdateStateWithExternalPosition();
+    stateControllerUpdateStateWithExternalPosition();
     stateControllerRun(&control, &sensorData, &state);
 #else
     commanderGetSetpoint(&setpoint, &state);

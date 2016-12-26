@@ -25,7 +25,7 @@ bool stateControllerTest(void);
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state);
 void stateControllerUpdateStateWithExternalPosition();
 
-#define EXTERNAL_MEASUREMENT_STDDEV (0.02)
+#define EXTERNAL_MEASUREMENT_STDDEV (0.005)
 
 #define CONTROLMODE_ACCELERATION(mode) ((0b001 & mode) != 0)
 #define CONTROLMODE_VELOCITY(mode)     ((0b010 & mode) != 0)

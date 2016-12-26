@@ -72,16 +72,30 @@ bool powerDistributionTest(void)
 }
 
 #define limitThrust(VAL) limitUint16(VAL)
+static uint32_t lastEnableTime = 0;
+static bool enabled = false;
 
 void powerDistribution(const control_t *control)
 {
   if (!control->enable || control->thrust * CRAZYFLIE_MASS < SHUTOFF_THRUST) {
+    lastEnableTime = xTaskGetTickCount();
+    enabled = false;
     motorsSetRatio(MOTOR_M1, 0);
     motorsSetRatio(MOTOR_M2, 0);
     motorsSetRatio(MOTOR_M3, 0);
     motorsSetRatio(MOTOR_M4, 0);
     return;
   }
+
+  if (!enabled && xTaskGetTickCount() - lastEnableTime < M2T(200)) {
+    motorsSetRatio(MOTOR_M1, 10000);
+    motorsSetRatio(MOTOR_M2, 10000);
+    motorsSetRatio(MOTOR_M3, 10000);
+    motorsSetRatio(MOTOR_M4, 10000);
+    return;
+  }
+
+  enabled = true;
   
   float motor_forces[4] = {0};
   ThrustForce = control->thrust * CRAZYFLIE_MASS; // force to provide control->thrust
