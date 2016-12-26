@@ -106,9 +106,13 @@ void powerDistribution(const control_t *control)
   PitchForce = control->torque[1] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide y torque
   
   motor_forces[0] = ThrustForce/4.0f - RollForce/4.0f - PitchForce/4.0f - YawForce/4.0f;
+  if (motor_forces[0]<0) { motor_forces[0]=0; }
   motor_forces[1] = ThrustForce/4.0f - RollForce/4.0f + PitchForce/4.0f + YawForce/4.0f;
+  if (motor_forces[1]<0) { motor_forces[1]=0; }
   motor_forces[2] = ThrustForce/4.0f + RollForce/4.0f + PitchForce/4.0f - YawForce/4.0f;
+  if (motor_forces[2]<0) { motor_forces[2]=0; }
   motor_forces[3] = ThrustForce/4.0f + RollForce/4.0f - PitchForce/4.0f + YawForce/4.0f;
+  if (motor_forces[3]<0) { motor_forces[3]=0; }
     
   #else // QUAD_FORMATION_NORMAL
     motorPower.m1 = limitThrust(control->thrust + control->pitch +
