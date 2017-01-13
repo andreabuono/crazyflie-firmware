@@ -131,9 +131,9 @@ endif
 ############### Source files configuration ################
 
 # Init
-PROJ_OBJ += main.o
+PROJ_OBJ += main.o cfmath.o
 PROJ_OBJ_CF1 += platform_cf1.o
-PROJ_OBJ_CF2 += platform_cf2.o
+PROJ_OBJ_CF2 += platform_cf2.o physical_constants_cf2.o
 
 # Drivers
 PROJ_OBJ += exti.o nvic.o motors.o

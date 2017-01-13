@@ -21,8 +21,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
- * power_distribution_cf2.c - Crazyflie 2.0 stock power distribution code
+ * power_distribution_cf2.c - Crazyflie 2.0 model-based power distribution code
  */
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "arm_math.h"
@@ -32,27 +33,11 @@
 #include "log.h"
 #include "param.h"
 #include "num.h"
+#include "physical_constants.h"
 
 #include "motors.h"
 
-// TODO: move these into a physical constants file
-// thrust = a * pwm^2 + b * pwm
-const float PWM_TO_THRUST_a = .091492681f;
-const float PWM_TO_THRUST_b = .067673604f;
-const float PWM_TO_THRUST_b_sq = .067673604f*.067673604f;
-const float PWM_TO_THRUST_c = 5.484560e-4f;
-
-const float SHUTOFF_THRUST = 4.47e-3; // this would cause all motors to rotate with cmd 1000, too slow.
-
-// motor torque = m * thrust
-const float THRUST_TO_TORQUE_m = 0.005964552f;
-
-// constants
-const float CRAZYFLIE_ARM_LENGTH = 0.046f; // m
-const float CRAZYFLIE_MASS = 30e-3f; // kg
-
-static inline float arm_sqrt(float32_t in)
-{ float pOut = 0; arm_status result = arm_sqrt_f32(in, &pOut); configASSERT(ARM_MATH_SUCCESS == result); return pOut; }
+float SHUTOFF_THRUST = 4.47e-3; // this would cause all motors to rotate with cmd 1000, too slow.
 
 static float motor_pwm[4] = {0};
 static float RollForce, PitchForce, YawForce, ThrustForce;
@@ -71,12 +56,12 @@ bool powerDistributionTest(void)
   return pass;
 }
 
-#define limitThrust(VAL) limitUint16(VAL)
 static uint32_t lastEnableTime = 0;
 static bool enabled = false;
 
 void powerDistribution(const control_t *control)
 {
+  // if the motors should be disabled, disable them
   if (!control->enable || control->thrust * CRAZYFLIE_MASS < SHUTOFF_THRUST) {
     lastEnableTime = xTaskGetTickCount();
     enabled = false;
@@ -87,6 +72,7 @@ void powerDistribution(const control_t *control)
     return;
   }
 
+  // if the motors should be enabled after being disabled, spin them up first, this reduces the likelihood of flips on the ground
   if (!enabled && xTaskGetTickCount() - lastEnableTime < M2T(200)) {
     motorsSetRatio(MOTOR_M1, 10000);
     motorsSetRatio(MOTOR_M2, 10000);
@@ -95,6 +81,7 @@ void powerDistribution(const control_t *control)
     return;
   }
 
+  // otherwise enable the motors and calculate required commands
   enabled = true;
   
   float motor_forces[4] = {0};
@@ -110,15 +97,8 @@ void powerDistribution(const control_t *control)
   motor_forces[2] = ThrustForce/4.0f + RollForce/4.0f + PitchForce/4.0f - YawForce/4.0f;
   motor_forces[3] = ThrustForce/4.0f + RollForce/4.0f - PitchForce/4.0f + YawForce/4.0f;
     
-  #else // QUAD_FORMATION_NORMAL
-    motorPower.m1 = limitThrust(control->thrust + control->pitch +
-                               control->yaw);
-    motorPower.m2 = limitThrust(control->thrust - control->roll -
-                               control->yaw);
-    motorPower.m3 =  limitThrust(control->thrust - control->pitch +
-                               control->yaw);
-    motorPower.m4 =  limitThrust(control->thrust + control->roll -
-                               control->yaw);
+  #else // TODO: QUAD_FORMATION_NORMAL
+
   #endif
   
   for (int i=0; i<4; i++) {
@@ -126,11 +106,11 @@ void powerDistribution(const control_t *control)
       motor_forces[i] = 0;
       motor_pwm[i] = 0;
     } else {
-      motor_pwm[i] = (-PWM_TO_THRUST_b + arm_sqrt(PWM_TO_THRUST_b_sq + 4.0f * PWM_TO_THRUST_a * motor_forces[i])) /
+      motor_pwm[i] = (-PWM_TO_THRUST_b + arm_sqrt(PWM_TO_THRUST_b*PWM_TO_THRUST_b + 4.0f * PWM_TO_THRUST_a * motor_forces[i])) /
                      (2.0f * PWM_TO_THRUST_a);
     }
     
-    motor_pwm[i] = constrain(motor_pwm[i], 0.1, 1);
+    motor_pwm[i] = constrain(motor_pwm[i], 0.1, 1); // keep the motor spinning by lower-bounding with 0.1, otherwise motor friction plays a big role in performance
     motorsSetRatio(i, (uint16_t)(65535*motor_pwm[i]));
   }
 }

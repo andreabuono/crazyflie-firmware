@@ -25,6 +25,7 @@ bool stateControllerTest(void);
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state);
 void stateControllerUpdateStateWithExternalPosition();
 
+#define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 #define EXTERNAL_MEASUREMENT_STDDEV (0.005)
 
 #define CONTROLMODE_ACCELERATION(mode) ((0b001 & mode) != 0)

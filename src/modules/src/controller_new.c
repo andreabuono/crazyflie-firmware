@@ -48,22 +48,11 @@
 #include "log.h"
 #include "param.h"
 #include "num.h"
-
+#include "physical_constants.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
 #endif
-
-#define GRAVITY (9.81f)
-#define DEG_TO_RAD (((float)M_PI)/180.0f)
-#define ARCMINUTE (((float)M_PI)/10800.0f)
-
-// TODO: move this into a physical constants file
-static float INERTIA[3][3] =
-    {{16.6e-6f, 0.83e-6f, 0.72e-6f},
-     {0.83e-6f, 16.6e-6f, 1.8e-6f},
-     {0.72e-6f, 1.8e-6f, 29.3e-6f}}; // from Julian Förster's System Identification of a Crazyflie
-static arm_matrix_instance_f32 INERTIA_m = {3, 3, (float*)INERTIA};
 
 static float thrust_reduction_fairness = 0.0; // 1 -> even reduction across x, y, z, 0 -> z gets what it wants
 static float mixing_factor = 1.0;
@@ -88,126 +77,6 @@ static float omega_yaw_max = 30;
 static float igain_yaw = 0.01f;
 static float imax_yaw = 1.0f;
 static float igain_rate = 0.001f;
-
-
-
-static inline void mat_trans(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
-{ configASSERT(ARM_MATH_SUCCESS == arm_mat_trans_f32(pSrc, pDst)); }
-static inline void mat_inv(const arm_matrix_instance_f32 * pSrc, arm_matrix_instance_f32 * pDst)
-{ configASSERT(ARM_MATH_SUCCESS == arm_mat_inverse_f32(pSrc, pDst)); }
-static inline void mat_mult(const arm_matrix_instance_f32 * pSrcA, const arm_matrix_instance_f32 * pSrcB, arm_matrix_instance_f32 * pDst)
-{ configASSERT(ARM_MATH_SUCCESS == arm_mat_mult_f32(pSrcA, pSrcB, pDst)); }
-static inline float arm_sqrt(float32_t in)
-{ float pOut = 0; arm_status result = arm_sqrt_f32(in, &pOut); configASSERT(ARM_MATH_SUCCESS == result); return pOut; }
-
-
-static inline float vec_norm(const arm_matrix_instance_f32 *pSrcA) {
-  float32_t s = 0;
-  configASSERT( pSrcA->numCols == 1 );
-  
-  float *a = pSrcA->pData;
-  
-  for (int i=0; i<pSrcA->numRows; i++) {
-    s += a[0+1*i]*a[0+1*i];
-  }
-  return arm_sqrt(s);
-}
-
-static inline void vec_normalize(arm_matrix_instance_f32 *pSrcA) {
-  float norm = vec_norm(pSrcA);
-  
-  float *a = pSrcA->pData;
-  
-  for (int i=0; i<pSrcA->numRows; i++) {
-    a[i] = a[i]/norm;
-  }
-}
-
-static inline void vec_negate(arm_matrix_instance_f32 *pSrcA) {
-  configASSERT( pSrcA->numCols == 1 );
-  
-  float *a = pSrcA->pData;
-  
-  for (int i=0; i<pSrcA->numRows; i++) {
-    a[i] = -1*a[i];
-  }
-}
-
-static inline float vec_dot(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB) {
-  float32_t s = 0;
-  configASSERT( pSrcA->numCols == 1 );
-  configASSERT( pSrcB->numCols == 1 );
-  configASSERT( pSrcA->numRows == pSrcB->numRows );
-  
-  float *a = pSrcA->pData;
-  float *b = pSrcB->pData;
-  
-  for (int i=0; i<pSrcA->numRows; i++) {
-    s += a[0+1*i] * b[0+1*i];
-  }
-  return s;
-}
-
-static inline void vec_cross(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB, arm_matrix_instance_f32 *pDst) {
-  configASSERT( pSrcA->numCols == 1 );
-  configASSERT( pSrcB->numCols == 1 );
-  configASSERT( pDst->numCols == 1 );
-  configASSERT( pSrcA->numRows == 3 );
-  configASSERT( pSrcB->numRows == 3 );
-  configASSERT( pDst->numRows == 3 );
-  
-  float *a = pSrcA->pData;
-  float *b = pSrcB->pData;
-  float *c = pDst->pData;
-  
-  c[0] = a[1]*b[2] - a[2]*b[1];
-  c[1] = a[2]*b[0] - a[0]*b[2];
-  c[2] = a[0]*b[1] - a[1]*b[0];
-}
-
-static inline void quaternion_normalize(arm_matrix_instance_f32 *pSrcA) {
-  configASSERT( pSrcA->numCols == 1 );
-  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  
-  vec_normalize(pSrcA);
-  if (pSrcA->pData[0] < 0) {
-    vec_negate(pSrcA);
-  }
-}
-
-static inline void quaternion_inverse(const arm_matrix_instance_f32 *pSrcA, arm_matrix_instance_f32 *pDst) {
-  configASSERT( pSrcA->numCols == 1 );
-  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  configASSERT( pDst->numCols == 1 );
-  configASSERT( pDst->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  
-  float *a = pSrcA->pData;
-  float *c = pDst->pData;
-  c[0] = a[0];
-  c[1] = -a[1];
-  c[2] = -a[2];
-  c[3] = -a[3];
-  
-  vec_normalize(pDst);
-}
-
-static inline void quaternion_multiply(const arm_matrix_instance_f32 *pSrcA, const arm_matrix_instance_f32 *pSrcB, arm_matrix_instance_f32 *pDst) {
-  configASSERT( pSrcA->numCols == 1 );
-  configASSERT( pSrcA->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  configASSERT( pSrcB->numCols == 1 );
-  configASSERT( pSrcB->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  configASSERT( pDst->numCols == 1 );
-  configASSERT( pDst->numRows == 4 ); // vector is a quaternion [w, x, y, z]
-  
-  float *a = pSrcA->pData;
-  float *b = pSrcB->pData;
-  float *c = pDst->pData;
-  
-  c[0] = a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3];
-  c[1] = a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2];
-  c[2] = a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1];
-  c[3] = a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0];
-}
 
 static uint32_t lastReferenceTimestamp;
 static uint32_t lastExternalPositionTimestamp;
@@ -239,7 +108,6 @@ static controlReference_t ref;
 static float omegaIntegrators[3];
 static float yawIntegrator;
 static uint32_t lastControlUpdate;
-#define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
 {  
@@ -271,9 +139,9 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
 
   // define this here, since we do body-rate control at 1000Hz below the following if statement
   float omega[3] = {0};
-  omega[0] = sensors->gyro.x * DEG_TO_RAD;
-  omega[1] = sensors->gyro.y * DEG_TO_RAD;
-  omega[2] = sensors->gyro.z * DEG_TO_RAD;
+  omega[0] = radians(sensors->gyro.x);
+  omega[1] = radians(sensors->gyro.y);
+  omega[2] = radians(sensors->gyro.z);
   
   // update at the CONTROL_RATE (100Hz)
   if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE)
@@ -570,7 +438,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   
     if (igain_yaw > 0)
     {
-      yawIntegrator = constrain((1.0f - igain_yaw) * yawIntegrator + igain_yaw * attError[3], -imax_yaw, imax_yaw);
+      yawIntegrator = constrain(yawIntegrator + igain_yaw * attError[3], -imax_yaw, imax_yaw);
       control->omega[2] += yawIntegrator;
     }
     
@@ -605,7 +473,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   arm_matrix_instance_f32 torques_m = {3, 1, control->torque};
   
   // update the commanded body torques based on the current error in body rates
-  mat_mult(&INERTIA_m, &omegaErr_m, &torques_m);
+  mat_mult(&CRAZYFLIE_INERTIA_m, &omegaErr_m, &torques_m);
 }
 
 
