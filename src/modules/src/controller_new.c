@@ -54,29 +54,40 @@
 #include "estimator_kalman.h"
 #endif
 
-static float thrust_reduction_fairness = 0.0; // 1 -> even reduction across x, y, z, 0 -> z gets what it wants
-static float mixing_factor = 1.0;
+// tau is a time constant, lower -> more aggressive control (weight on position error)
+// zeta is a damping factor, higher -> more damping (weight on velocity error)
 
 static float tau_xy = 0.3;
-static float zeta_xy = 0.65;
+static float zeta_xy = 0.85; // this gives good performance down to 0.4, the lower the more aggressive (less damping)
 
-static float tau_z = 0.2;
-static float zeta_z = 0.55;
+static float tau_z = 0.3;
+static float zeta_z = 0.85;
 
+// time constant of body angle (thrust direction) control
 static float tau_rp = 0.25;
+// what percentage is yaw control speed in terms of roll/pitch control speed \in [0, 1], 0 means yaw not controlled
+static float mixing_factor = 1.0;
 
+// time constant of rotational rate control
 static float tau_rp_rate = 0.015;
 static float tau_yaw_rate = 0.0075;
 
+// minimum and maximum thrusts
 static float coll_min = 5;
 static float coll_max = 15;
+// if too much thrust is commanded, which axis is reduced to meet maximum thrust?
+// 1 -> even reduction across x, y, z
+// 0 -> z gets what it wants (eg. maintain height at all costs)
+static float thrust_reduction_fairness = 0.0; 
 
+// minimum and maximum body rates
 static float omega_rp_max = 30;
-static float omega_yaw_max = 30;
+static float omega_yaw_max = 10;
 
-static float igain_yaw = 0.01f;
-static float imax_yaw = 1.0f;
-static float igain_rate = 0.001f;
+// Integrators on errors. Not sure if this makes sense.
+static float igain_yaw = 0;
+static float imax_yaw = 0;
+static float igain_rate = 0;
 
 static uint32_t lastReferenceTimestamp;
 static uint32_t lastExternalPositionTimestamp;
@@ -112,7 +123,7 @@ static uint32_t lastControlUpdate;
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
 {  
   uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
-  if (ticksSinceLastCommand > M2T(100)) { // require commands at 10Hz
+  if (ticksSinceLastCommand > M2T(500)) { // require commands at 2Hz
     control->enable = false;
     return;
   }
@@ -565,5 +576,8 @@ PARAM_ADD(PARAM_FLOAT, coll_min, &coll_min)
 PARAM_ADD(PARAM_FLOAT, coll_max, &coll_max)
 PARAM_ADD(PARAM_FLOAT, omega_rp_max, &omega_rp_max)
 PARAM_ADD(PARAM_FLOAT, omega_yaw_max, &omega_yaw_max)
+PARAM_ADD(PARAM_FLOAT, igain_yaw, &igain_yaw)
+PARAM_ADD(PARAM_FLOAT, imax_yaw, &imax_yaw)
+PARAM_ADD(PARAM_FLOAT, igain_rate, &igain_rate)
 PARAM_GROUP_STOP(ctrlr)
 
