@@ -68,10 +68,10 @@ typedef struct quaternion_s {
       float q3;
     };
     struct {
+      float w;
       float x;
       float y;
       float z;
-      float w;
     };
   };
 } quaternion_t;
@@ -130,9 +130,11 @@ typedef struct state_s {
 } state_t;
 
 typedef struct control_s {
-  int16_t roll;
-  int16_t pitch;
-  int16_t yaw;
+  bool enable;
+  int16_t roll, pitch, yaw;
+  float omega[3]; // used for the cf2 power distribution
+  float torque[3]; // used for the cf2 power distribution
+  float motorScale[4]; // populated by the cf2 motor calibration routine
   float thrust;
 } control_t;
 

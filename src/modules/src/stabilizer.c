@@ -23,7 +23,7 @@
  *
  *
  */
-#include <math.h>
+#include "cfmath.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -35,16 +35,21 @@
 #include "stabilizer.h"
 
 #include "sensors.h"
-#include "commander.h"
-#include "ext_position.h"
-#include "sitaw.h"
-#include "controller.h"
 #include "power_distribution.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
 #else
 #include "estimator.h"
+#endif
+
+#ifdef CONTROLLER_TYPE_new
+#include "controller_new.h"
+#else
+#include "commander.h"
+#include "controller.h"
+#include "ext_position.h"
+#include "sitaw.h"
 #endif
 
 static bool isInit;
@@ -111,19 +116,26 @@ static void stabilizerTask(void* param)
   while(1) {
     vTaskDelayUntil(&lastWakeTime, F2T(RATE_MAIN_LOOP));
 
+#ifdef CONTROLLER_TYPE_new
+    stateControllerUpdateStateWithExternalPosition();
+#else
     getExtPosition(&state);
+#endif
+    
 #ifdef ESTIMATOR_TYPE_kalman
     stateEstimatorUpdate(&state, &sensorData, &control);
 #else
     sensorsAcquire(&sensorData, tick);
     stateEstimator(&state, &sensorData, tick);
 #endif
-
+    
+#ifdef CONTROLLER_TYPE_new
+    stateControllerRun(&control, &sensorData, &state);
+#else
     commanderGetSetpoint(&setpoint, &state);
-
     sitAwUpdateSetpoint(&setpoint, &sensorData, &state);
-
     stateController(&control, &setpoint, &sensorData, &state, tick);
+#endif
     powerDistribution(&control);
 
     tick++;
@@ -167,6 +179,12 @@ LOG_ADD(LOG_FLOAT, y, &sensorData.mag.y)
 LOG_ADD(LOG_FLOAT, z, &sensorData.mag.z)
 LOG_GROUP_STOP(mag)
 
-LOG_GROUP_START(controller)
-LOG_ADD(LOG_INT16, ctr_yaw, &control.yaw)
-LOG_GROUP_STOP(controller)
+LOG_GROUP_START(controlNL)
+LOG_ADD(LOG_FLOAT, omega0, &control.omega[0])
+LOG_ADD(LOG_FLOAT, omega1, &control.omega[1])
+LOG_ADD(LOG_FLOAT, omega2, &control.omega[2])
+LOG_ADD(LOG_FLOAT, trq0, &control.torque[0])
+LOG_ADD(LOG_FLOAT, trq1, &control.torque[1])
+LOG_ADD(LOG_FLOAT, trq2, &control.torque[2])
+LOG_ADD(LOG_FLOAT, thrust, &control.thrust)
+LOG_GROUP_STOP(controlNL)
