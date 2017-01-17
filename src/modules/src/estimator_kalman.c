@@ -259,7 +259,6 @@ static uint32_t gyroAccumulatorCount;
 static uint32_t baroAccumulatorCount;
 static bool quadIsFlying = false;
 static int32_t lastTDOAUpdate;
-static float stateSkew;
 static float varSkew;
 static uint32_t lastFlightCmd;
 static uint32_t takeoffTime;
