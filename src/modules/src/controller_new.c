@@ -20,12 +20,6 @@
  * "Nonlinear Quadrocopter Attitude Control"
  * http://e-collection.library.ethz.ch/eserv/eth:7387/eth-7387-01.pdf
  *
- * and
- *
- * "Kalman filtering with an attitude" as published in the PhD thesis "Increased autonomy for quadrocopter systems: trajectory generation, fail-safe strategies, and state estimation"
- * http://dx.doi.org/10.3929/ethz-a-010655275
- * TODO: Update the above reference once the paper has been published
- *
  * Academic citation would be appreciated.
  *
  * BIBTEX ENTRIES:
@@ -73,15 +67,15 @@ static float tau_rp_rate = 0.015;
 static float tau_yaw_rate = 0.0075;
 
 // minimum and maximum thrusts
-static float coll_min = 5;
-static float coll_max = 15;
+static float coll_min = 1;
+static float coll_max = 18;
 // if too much thrust is commanded, which axis is reduced to meet maximum thrust?
 // 1 -> even reduction across x, y, z
 // 0 -> z gets what it wants (eg. maintain height at all costs)
-static float thrust_reduction_fairness = 0.0; 
+static float thrust_reduction_fairness = 0.25; 
 
 // minimum and maximum body rates
-static float omega_rp_max = 30;
+static float omega_rp_max = 60;
 static float omega_yaw_max = 10;
 
 // Integrators on errors. Not sure if this makes sense.
