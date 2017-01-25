@@ -42,16 +42,20 @@ float vec_norm(const arm_matrix_instance_f32 *pSrcA) {
   float *a = pSrcA->pData;
   
   for (int i=0; i<pSrcA->numRows; i++) {
-    s += a[0+1*i]*a[0+1*i];
+    s += powf(a[0+1*i], 2);
   }
+
+  if (s<=0) { return 0; }
+
   return arm_sqrt(s);
 }
 
 void vec_normalize(arm_matrix_instance_f32 *pSrcA) {
   float norm = vec_norm(pSrcA);
   
+  if (norm<=0) { return; }
+
   float *a = pSrcA->pData;
-  
   for (int i=0; i<pSrcA->numRows; i++) {
     a[i] = a[i]/norm;
   }

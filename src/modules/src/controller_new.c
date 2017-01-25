@@ -244,7 +244,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     // compute commanded thrust required to achieve the z acceleration
     collCmd = accDes[2] / R[2][2];
     
-    if (collCmd > coll_max) {
+    if (fabsf(collCmd) > coll_max) {
       // exceeding the thrust threshold
       // we compute a reduction factor r based on fairness f \in [0,1] such that:
       // collMax^2 = (r*x)^2 + (r*y)^2 + (r*f*z + (1-f)z + g)^2
@@ -254,14 +254,24 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       float g = GRAVITY;
       float f = constrain(thrust_reduction_fairness, 0, 1);
       
+      float r = 0;
+
       // solve as a quadratic
       float a = powf(x, 2) + powf(y, 2) + powf(z*f, 2);
+      if (a<0) { a = 0; }
+
       float b = 2 * z*f*((1-f)*z + g);
-      float c = powf((1-f)*z + g, 2) - powf(coll_max, 2);
-      
-      float r = (-b + arm_sqrt(powf(b, 2) - 4.0f*a*c))/(2.0f*a);
-      r = constrain(r,0,1);
-      
+      float c = powf(coll_max, 2) - powf((1-f)*z + g, 2);
+      if (c<0) { c = 0; }
+
+      if (fabsf(a)<1e-6f) {
+        r = 0;
+      } else {
+        float sqrtterm = powf(b, 2) + 4.0f*a*c;
+        configASSERT(sqrtterm>=0);
+        r = (-b + arm_sqrt(sqrtterm))/(2.0f*a);
+        r = constrain(r,0,1);
+      }
       accDes[0] = r*x;
       accDes[1] = r*y;
       accDes[2] = (r*f+(1-f))*z + g;

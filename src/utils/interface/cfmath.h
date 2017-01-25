@@ -2,6 +2,7 @@
 
 #include "arm_math.h"
 #include "math.h"
+#include "num.h"
 
 #define ARCMINUTE (((float)M_PI)/10800.0f)
 
