@@ -77,11 +77,8 @@ static float thrust_reduction_fairness = 0.25;
 // minimum and maximum body rates
 static float omega_rp_max = 60;
 static float omega_yaw_max = 10;
-
-// Integrators on errors. Not sure if this makes sense.
-static float igain_yaw = 0;
-static float imax_yaw = 0;
-static float igain_rate = 0;
+static float heuristic_rp = 12;
+static float heuristic_yaw = 5;
 
 static uint32_t lastReferenceTimestamp;
 static uint32_t lastExternalPositionTimestamp;
@@ -90,7 +87,8 @@ static xQueueHandle referenceQueue;
 
 // Struct for logging position information
 static positionMeasurement_t ext_pos;
-
+static controlReference_t ref;
+static uint32_t lastControlUpdate;
 static bool isInit = false;
 
 static void stateControllerCrtpCB(CRTPPacket* pk);
@@ -108,11 +106,6 @@ void stateControllerInit(void)
   
   isInit = true;
 }
-
-static controlReference_t ref;
-static float omegaIntegrators[3];
-static float yawIntegrator;
-static uint32_t lastControlUpdate;
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
 {  
@@ -133,7 +126,6 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     else if (ref.resetEmergency)
     {
       control->enable = true;
-      omegaIntegrators[0] = omegaIntegrators[1] = omegaIntegrators[2] = 0;
     }
   }
   
@@ -431,22 +423,26 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       quaternion_normalize(&attError_m);
     }
   
-    // TODO: Heuristic for yaw rotation direction based on current rotation axis & speed?
-  
-  
     // ====== COMPUTE CONTROL SIGNALS ======
       
     // compute the commanded body rates
     control->omega[0] = 2.0f / tau_rp * attError[1];
     control->omega[1] = 2.0f / tau_rp * attError[2];
     control->omega[2] = 2.0f / tau_rp * attError[3] + ref.yaw[1]; // due to the mixing, this will behave with time constant tau_yaw
-  
-    if (igain_yaw > 0)
-    {
-      yawIntegrator = constrain(yawIntegrator + igain_yaw * attError[3], -imax_yaw, imax_yaw);
-      control->omega[2] += yawIntegrator;
+
+    // apply the rotation heuristic
+    if (control->omega[0] * omega[0] < 0 && abs(omega[0]) > heuristic_rp) { // desired rotational rate in direction opposite to current rotational rate
+      control->omega[0] = omega_rp_max * (omega[0] < 0 ? -1 : 1); // maximum rotational rate in direction of current rotation
+    }
+
+    if (control->omega[1] * omega[1] < 0 && abs(omega[1]) > heuristic_rp) { // desired rotational rate in direction opposite to current rotational rate
+      control->omega[1] = omega_rp_max * (omega[1] < 0 ? -1 : 1); // maximum rotational rate in direction of current rotation
     }
     
+    if (control->omega[2] * omega[2] < 0 && abs(omega[2]) > heuristic_yaw) { // desired rotational rate in direction opposite to current rotational rate
+      control->omega[2] = omega_rp_max * (omega[2] < 0 ? -1 : 1); // maximum rotational rate in direction of current rotation
+    }
+
     // scale the commands to satisfy rate constraints
     float scaling = 1;
     scaling = max(scaling, fabsf(control->omega[0]) / omega_rp_max);
@@ -463,16 +459,6 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   float omegaErr[3] = {(control->omega[0] - omega[0])/tau_rp_rate,
                        (control->omega[1] - omega[1])/tau_rp_rate,
                        (control->omega[2] - omega[2])/tau_yaw_rate};
-  
-  if (igain_rate > 0)
-  {
-    for (int i = 0; i < 3; i++)
-    {
-      omegaIntegrators[i] = (1.0f - igain_rate) * omegaIntegrators[i] + igain_rate * omegaErr[i];
-      omegaErr[i] += omegaIntegrators[i];
-    }
-  }
-    
   
   arm_matrix_instance_f32 omegaErr_m = {3, 1, omegaErr};
   arm_matrix_instance_f32 torques_m = {3, 1, control->torque};
@@ -564,14 +550,13 @@ PARAM_ADD(PARAM_FLOAT, zeta_z, &zeta_z)
 PARAM_ADD(PARAM_FLOAT, tau_rp, &tau_rp)
 PARAM_ADD(PARAM_FLOAT, mixing_factor, &mixing_factor)
 PARAM_ADD(PARAM_FLOAT, coll_fairness, &thrust_reduction_fairness)
+PARAM_ADD(PARAM_FLOAT, heuristic_rp, &heuristic_rp)
+PARAM_ADD(PARAM_FLOAT, heuristic_yaw, &heuristic_yaw)
 PARAM_ADD(PARAM_FLOAT, tau_rp_rate, &tau_rp_rate)
 PARAM_ADD(PARAM_FLOAT, tau_yaw_rate, &tau_yaw_rate)
 PARAM_ADD(PARAM_FLOAT, coll_min, &coll_min)
 PARAM_ADD(PARAM_FLOAT, coll_max, &coll_max)
 PARAM_ADD(PARAM_FLOAT, omega_rp_max, &omega_rp_max)
 PARAM_ADD(PARAM_FLOAT, omega_yaw_max, &omega_yaw_max)
-PARAM_ADD(PARAM_FLOAT, igain_yaw, &igain_yaw)
-PARAM_ADD(PARAM_FLOAT, imax_yaw, &imax_yaw)
-PARAM_ADD(PARAM_FLOAT, igain_rate, &igain_rate)
 PARAM_GROUP_STOP(ctrlr)
 
