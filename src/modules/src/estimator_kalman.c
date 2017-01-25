@@ -226,6 +226,7 @@ typedef enum
 } stateIdx_t;
 
 static float S[STATE_DIM];
+static uint16_t Sx16, Sy16, Sz16; // storage for float16 states, mainly for logging to fit more data in a packet
 
 // The quad's attitude as a right quaternion (w,x,y,z)  (such that v_I = q* v_B q)
 // We store as a quaternion to allow easy normalization (in comparison to a rotation matrix),
@@ -1073,6 +1074,10 @@ static void stateEstimatorFinalize(sensorData_t *sensors, uint32_t tick)
     else if (S[STATE_PX+i] > MAX_VELOCITY) { S[STATE_PX+i] = MAX_VELOCITY; }
   }
 
+  Sx16 = single2half(S[STATE_X]);
+  Sy16 = single2half(S[STATE_Y]);
+  Sz16 = single2half(S[STATE_Z]);
+
   // enforce symmetry of the covariance matrix, and ensure the values stay bounded
   for (int i=0; i<STATE_DIM; i++) {
     for (int j=i; j<STATE_DIM; j++) {
@@ -1274,13 +1279,16 @@ LOG_GROUP_START(measured)
   LOG_ADD(LOG_FLOAT, x, &S[STATE_X])
   LOG_ADD(LOG_FLOAT, y, &S[STATE_Y])
   LOG_ADD(LOG_FLOAT, z, &S[STATE_Z])
+  LOG_ADD(LOG_UINT16, x16, &Sx16)
+  LOG_ADD(LOG_UINT16, y16, &Sy16)
+  LOG_ADD(LOG_UINT16, z16, &Sz16)
   LOG_ADD(LOG_FLOAT, px, &S[STATE_PX])
   LOG_ADD(LOG_FLOAT, py, &S[STATE_PY])
   LOG_ADD(LOG_FLOAT, pz, &S[STATE_PZ])
-  LOG_ADD(LOG_FLOAT, q0, &q[0])
-  LOG_ADD(LOG_FLOAT, q1, &q[1])
-  LOG_ADD(LOG_FLOAT, q2, &q[2])
-  LOG_ADD(LOG_FLOAT, q3, &q[3])
+  LOG_ADD(LOG_FLOAT, qw, &q[0])
+  LOG_ADD(LOG_FLOAT, qx, &q[1])
+  LOG_ADD(LOG_FLOAT, qy, &q[2])
+  LOG_ADD(LOG_FLOAT, qz, &q[3])
 LOG_GROUP_STOP(measured)
 
 PARAM_GROUP_START(kalman)
