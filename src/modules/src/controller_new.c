@@ -75,7 +75,7 @@ static float coll_max = 18;
 static float thrust_reduction_fairness = 0.25; 
 
 // minimum and maximum body rates
-static float omega_rp_max = 60;
+static float omega_rp_max = 30;
 static float omega_yaw_max = 10;
 static float heuristic_rp = 12;
 static float heuristic_yaw = 5;
@@ -112,6 +112,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
   if (ticksSinceLastCommand > M2T(500)) { // require commands at 2Hz
     control->enable = false;
+    control->thrust = 0;
     return;
   }
   
@@ -131,6 +132,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   
   if (!control->enable)
   {
+    control->thrust = 0;
     return;
   }
 
