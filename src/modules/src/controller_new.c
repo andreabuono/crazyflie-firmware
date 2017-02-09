@@ -72,7 +72,7 @@ static float coll_max = 18;
 // if too much thrust is commanded, which axis is reduced to meet maximum thrust?
 // 1 -> even reduction across x, y, z
 // 0 -> z gets what it wants (eg. maintain height at all costs)
-static float thrust_reduction_fairness = 0.25; 
+static float thrust_reduction_fairness = 0.25;
 
 // minimum and maximum body rates
 static float omega_rp_max = 30;
@@ -81,12 +81,8 @@ static float heuristic_rp = 12;
 static float heuristic_yaw = 5;
 
 static uint32_t lastReferenceTimestamp;
-static uint32_t lastExternalPositionTimestamp;
-static xQueueHandle externalPositionQueue;
 static xQueueHandle referenceQueue;
 
-// Struct for logging position information
-static positionMeasurement_t ext_pos;
 static controlReference_t ref;
 static uint32_t lastControlUpdate;
 static bool isInit = false;
@@ -99,25 +95,24 @@ void stateControllerInit(void)
     return;
   }
 
-  externalPositionQueue = xQueueCreate(1, sizeof(positionMeasurement_t));
   referenceQueue = xQueueCreate(1, sizeof(controlReference_t));
-  
+
   crtpRegisterPortCB(CRTP_PORT_CONTROL, stateControllerCrtpCB);
-  
+
   isInit = true;
 }
 
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state)
-{  
+{
   uint32_t ticksSinceLastCommand = (xTaskGetTickCount() - lastReferenceTimestamp);
   if (ticksSinceLastCommand > M2T(500)) { // require commands at 2Hz
     control->enable = false;
     control->thrust = 0;
     return;
   }
-  
+
   bool referenceReceived = (pdTRUE == xQueueReceive(referenceQueue, &ref, 0));
-  
+
   if (referenceReceived)
   {
     if (ref.setEmergency)
@@ -129,7 +124,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       control->enable = true;
     }
   }
-  
+
   if (!control->enable)
   {
     control->thrust = 0;
@@ -141,77 +136,77 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   omega[0] = radians(sensors->gyro.x);
   omega[1] = radians(sensors->gyro.y);
   omega[2] = radians(sensors->gyro.z);
-  
+
   // update at the CONTROL_RATE (100Hz)
   if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE)
   {
     lastControlUpdate = xTaskGetTickCount();
-    
+
     // desired accelerations
-    float accDes[3] = {0};  
+    float accDes[3] = {0};
     // desired thrust
     float collCmd = 0;
-  
+
     // attitude error as computed by the reduced attitude controller
     float attErrorReduced[4] = {0};
     arm_matrix_instance_f32 attErrorReduced_m = {4, 1, attErrorReduced};
-  
+
     // desired attitude as computed by the reduced attitude controller
     float attDesiredReduced[4] = {0};
     arm_matrix_instance_f32 attDesiredReduced_m = {4, 1, attDesiredReduced};
-  
+
     // attitude error as computed by the full attitude controller
     float attErrorFull[4] = {0};
     arm_matrix_instance_f32 attErrorFull_m = {4, 1, attErrorFull};
-  
+
     // desired attitude as computed by the full attitude controller
     float attDesiredFull[4] = {0};
     arm_matrix_instance_f32 attDesiredFull_m = {4, 1, attDesiredFull};
-  
+
     // current attitude
     quaternion_t sq = state->attitudeQuaternion;
     float q[4] = {sq.w, sq.x, sq.y, sq.z};
     arm_matrix_instance_f32 attitude_m = {4, 1, q};
-  
+
     // inverse of current attitude
     float qI[4] = {0};
     arm_matrix_instance_f32 attitudeI_m = {4, 1, qI};
     quaternion_inverse(&attitude_m, &attitudeI_m);
-    
+
     // body frame -> inertial frame :  vI = R*vB
     float R[3][3] = {0};
-  
+
     R[0][0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
     R[0][1] = 2 * q[1] * q[2] - 2 * q[0] * q[3];
     R[0][2] = 2 * q[1] * q[3] + 2 * q[0] * q[2];
-  
+
     R[1][0] = 2 * q[1] * q[2] + 2 * q[0] * q[3];
     R[1][1] = q[0] * q[0] - q[1] * q[1] + q[2] * q[2] - q[3] * q[3];
     R[1][2] = 2 * q[2] * q[3] - 2 * q[0] * q[1];
-  
+
     R[2][0] = 2 * q[1] * q[3] - 2 * q[0] * q[2];
     R[2][1] = 2 * q[2] * q[3] + 2 * q[0] * q[1];
     R[2][2] = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
-    
+
     // a few temporary quaternions
     float temp1[4] = {0};
     arm_matrix_instance_f32 temp1_m = {4, 1, temp1};
-  
+
     float temp2[4] = {0};
     arm_matrix_instance_f32 temp2_m = {4, 1, temp2};
-    
+
     // compute the position and velocity errors
     float pError[] = {ref.x[0] - state->position.x,
                       ref.y[0] - state->position.y,
                       ref.z[0] - state->position.z};
-  
+
     float vError[] = {ref.x[1] - state->velocity.x,
                       ref.y[1] - state->velocity.y,
                       ref.z[1] - state->velocity.z};
-  
-  
+
+
     // ====== LINEAR CONTROL ======
-  
+
     // compute desired accelerations in X, Y and Z
     accDes[0] = 0;
     if (CONTROLMODE_POSITION(ref.xmode))
@@ -221,7 +216,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     if (CONTROLMODE_ACCELERATION(ref.xmode))
     { accDes[0] += ref.x[2]; }
     accDes[0] = constrain(accDes[0], -coll_max, coll_max);
-  
+
     accDes[1] = 0;
     if (CONTROLMODE_POSITION(ref.ymode))
     { accDes[1] += 1.0f / tau_xy / tau_xy * pError[1]; }
@@ -230,7 +225,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     if (CONTROLMODE_ACCELERATION(ref.ymode))
     { accDes[1] += ref.y[2]; }
     accDes[1] = constrain(accDes[1], -coll_max, coll_max);
-  
+
     accDes[2] = GRAVITY;
     if (CONTROLMODE_POSITION(ref.zmode))
     { accDes[2] += 1.0f / tau_z / tau_z * pError[2]; }
@@ -239,13 +234,13 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     if (CONTROLMODE_ACCELERATION(ref.zmode))
     { accDes[2] += ref.z[2]; }
     accDes[2] = constrain(accDes[2], -coll_max, coll_max);
-  
-  
+
+
     // ====== THRUST CONTROL ======
-  
+
     // compute commanded thrust required to achieve the z acceleration
     collCmd = accDes[2] / R[2][2];
-    
+
     if (fabsf(collCmd) > coll_max) {
       // exceeding the thrust threshold
       // we compute a reduction factor r based on fairness f \in [0,1] such that:
@@ -255,7 +250,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       float z = accDes[2] - GRAVITY;
       float g = GRAVITY;
       float f = constrain(thrust_reduction_fairness, 0, 1);
-      
+
       float r = 0;
 
       // solve as a quadratic
@@ -279,34 +274,34 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       accDes[2] = (r*f+(1-f))*z + g;
     }
     collCmd = constrain(accDes[2] / R[2][2], coll_min, coll_max);
-  
+
     // FYI: this thrust will result in the accelerations
     // xdd = R02*coll
     // ydd = R12*coll
-  
+
     // a unit vector pointing in the direction of the desired thrust (ie. the direction of body's z axis in the inertial frame)
     float zI_des[3] = {accDes[0], accDes[1], accDes[2]};
     arm_matrix_instance_f32 zI_des_m = {3, 1, zI_des};
     vec_normalize(&zI_des_m);
-  
+
     // a unit vector pointing in the direction of the current thrust
     float zI_cur[3] = {R[0][2], R[1][2], R[2][2]};
     arm_matrix_instance_f32 zI_cur_m = {3, 1, zI_cur};
     vec_normalize(&zI_cur_m);
-  
+
     // a unit vector pointing in the direction of the inertial frame z-axis
     float zI[3] = {0, 0, 1};
     arm_matrix_instance_f32 zI_m = {3, 1, zI};
-  
-  
-  
+
+
+
     // ====== REDUCED ATTITUDE CONTROL ======
-  
+
     // compute the error angle between the current and the desired thrust directions
     float dotProd = vec_dot(&zI_cur_m, &zI_des_m);
     dotProd = constrain(dotProd, -1, 1);
     float alpha = acosf(dotProd);
-  
+
     // the axis around which this rotation needs to occur in the inertial frame (ie. an axis orthogonal to the two)
     float rotAxisI[3] = {0};
     arm_matrix_instance_f32 rotAxisI_m = {3, 1, rotAxisI};
@@ -321,13 +316,13 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       rotAxisI[1] = 1;
       rotAxisI[2] = 0;
     }
-  
+
     // the attitude error quaternion
     attErrorReduced[0] = cosf(alpha / 2.0f);
     attErrorReduced[1] = sinf(alpha / 2.0f) * rotAxisI[0];
     attErrorReduced[2] = sinf(alpha / 2.0f) * rotAxisI[1];
     attErrorReduced[3] = sinf(alpha / 2.0f) * rotAxisI[2];
-  
+
     // choose the shorter rotation
     if (sinf(alpha / 2.0f) < 0)
     {
@@ -338,19 +333,19 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       vec_negate(&rotAxisI_m);
       vec_negate(&attErrorReduced_m);
     }
-    
+
     quaternion_multiply(&attitude_m, &attErrorReduced_m, &attDesiredReduced_m);
     quaternion_normalize(&attErrorReduced_m);
     quaternion_normalize(&attDesiredReduced_m);
-  
-  
+
+
     // ====== FULL ATTITUDE CONTROL ======
-  
+
     // compute the error angle between the inertial and the desired thrust directions
     dotProd = vec_dot(&zI_m, &zI_des_m);
     dotProd = constrain(dotProd, -1, 1);
     alpha = acosf(dotProd);
-  
+
     // the axis around which this rotation needs to occur in the inertial frame (ie. an axis orthogonal to the two)
     if (fabsf(alpha) > 1 * ARCMINUTE)
     {
@@ -363,7 +358,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
       rotAxisI[1] = 1;
       rotAxisI[2] = 0;
     }
-  
+
     // the quaternion corresponding to a roll and pitch around this axis
     float attFullReqPitchRoll[4] = {0};
     arm_matrix_instance_f32 attFullReqPitchRoll_m = {4, 1, attFullReqPitchRoll};
@@ -371,37 +366,37 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     attFullReqPitchRoll[1] = sinf(alpha / 2.0f) * rotAxisI[0];
     attFullReqPitchRoll[2] = sinf(alpha / 2.0f) * rotAxisI[1];
     attFullReqPitchRoll[3] = sinf(alpha / 2.0f) * rotAxisI[2];
-  
+
     // the quaternion corresponding to a rotation to the desired yaw
     float attFullReqYaw[4] = {0};
     arm_matrix_instance_f32 attFullReqYaw_m = {4, 1, attFullReqYaw};
-    attFullReqYaw[0] = cosf(ref.yaw[0] / 2.0f);
+    attFullReqYaw[0] = cosf(ref.yaw / 2.0f);
     attFullReqYaw[1] = 0;
     attFullReqYaw[2] = 0;
-    attFullReqYaw[3] = sinf(ref.yaw[0] / 2.0f);
-  
+    attFullReqYaw[3] = sinf(ref.yaw / 2.0f);
+
     // the full rotation (roll & pitch, then yaw)
     quaternion_multiply(&attFullReqPitchRoll_m, &attFullReqYaw_m, &attDesiredFull_m);
-  
+
     // back transform from the current attitude to get the error between rotations
     quaternion_multiply(&attitudeI_m, &attDesiredFull_m, &attErrorFull_m);
-  
+
     // correct rotation
     if (attErrorFull[0] < 0)
     {
       vec_negate(&attErrorFull_m);
       quaternion_multiply(&attitude_m, &attErrorFull_m, &attDesiredFull_m);
     }
-  
+
     quaternion_normalize(&attErrorFull_m);
     quaternion_normalize(&attDesiredFull_m);
-  
-  
+
+
     // ====== MIXING FULL & REDUCED CONTROL ======
- 
+
     float attError[4] = {0};
     arm_matrix_instance_f32 attError_m = {4, 1, attError};
-  
+
     if (mixing_factor <= 0)
     {
       // 100% reduced control (no yaw control)
@@ -415,32 +410,32 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     else
     {
       // mixture of reduced and full control
-    
+
       // calculate rotation between the two errors
       quaternion_inverse(&attErrorReduced_m, &temp1_m);
       quaternion_multiply(&temp1_m, &attErrorFull_m, &temp2_m);
       quaternion_normalize(&temp2_m);
-    
+
       // by defintion this rotation has the form [cos(alpha/2), 0, 0, sin(alpha/2)]
       // where the first element gives the rotation angle, and the last the direction
       alpha = 2.0f * acosf(constrain(temp2[0], -1, 1));
-    
+
       // bisect the rotation from reduced to full control
       temp1[0] = cosf(alpha * mixing_factor / 2.0f);
       temp1[1] = 0;
       temp1[2] = 0;
       temp1[3] = sinf(alpha * mixing_factor / 2.0f) * (temp2[3] < 0 ? -1 : 1); // rotate in the correct direction
-      
+
       quaternion_multiply(&attErrorReduced_m, &temp1_m, &attError_m);
       quaternion_normalize(&attError_m);
     }
-  
+
     // ====== COMPUTE CONTROL SIGNALS ======
-      
+
     // compute the commanded body rates
-    control->omega[0] = 2.0f / tau_rp * attError[1];
-    control->omega[1] = 2.0f / tau_rp * attError[2];
-    control->omega[2] = 2.0f / tau_rp * attError[3] + ref.yaw[1]; // due to the mixing, this will behave with time constant tau_yaw
+    control->omega[0] = 2.0f / tau_rp * attError[1] + ref.p;
+    control->omega[1] = 2.0f / tau_rp * attError[2] + ref.q;
+    control->omega[2] = 2.0f / tau_rp * attError[3] + ref.r; // due to the mixing, this will behave with time constant tau_yaw
 
     // apply the rotation heuristic
     if (control->omega[0] * omega[0] < 0 && abs(omega[0]) > heuristic_rp) { // desired rotational rate in direction opposite to current rotational rate
@@ -450,7 +445,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     if (control->omega[1] * omega[1] < 0 && abs(omega[1]) > heuristic_rp) { // desired rotational rate in direction opposite to current rotational rate
       control->omega[1] = omega_rp_max * (omega[1] < 0 ? -1 : 1); // maximum rotational rate in direction of current rotation
     }
-    
+
     if (control->omega[2] * omega[2] < 0 && abs(omega[2]) > heuristic_yaw) { // desired rotational rate in direction opposite to current rotational rate
       control->omega[2] = omega_rp_max * (omega[2] < 0 ? -1 : 1); // maximum rotational rate in direction of current rotation
     }
@@ -460,21 +455,21 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     scaling = max(scaling, fabsf(control->omega[0]) / omega_rp_max);
     scaling = max(scaling, fabsf(control->omega[1]) / omega_rp_max);
     scaling = max(scaling, fabsf(control->omega[2]) / omega_yaw_max);
-  
+
     control->omega[0] /= scaling;
     control->omega[1] /= scaling;
     control->omega[2] /= scaling;
     control->thrust = collCmd;
   }
-  
+
   // control the body torques
   float omegaErr[3] = {(control->omega[0] - omega[0])/tau_rp_rate,
                        (control->omega[1] - omega[1])/tau_rp_rate,
                        (control->omega[2] - omega[2])/tau_yaw_rate};
-  
+
   arm_matrix_instance_f32 omegaErr_m = {3, 1, omegaErr};
   arm_matrix_instance_f32 torques_m = {3, 1, control->torque};
-  
+
   // update the commanded body torques based on the current error in body rates
   mat_mult(&CRAZYFLIE_INERTIA_m, &omegaErr_m, &torques_m);
 }
@@ -482,77 +477,28 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
 
 static void stateControllerCrtpCB(CRTPPacket* pk)
 {
-  crtpControlPacketHeader_t *header = (crtpControlPacketHeader_t*)pk->data;
-  
-  if (header->packetHasExternalReference)
-  {
-    crtpControlPacketWithExternalPosition_t *packet = (crtpControlPacketWithExternalPosition_t*)pk->data;
-    
-    positionMeasurement_t externalPosition;
-    externalPosition.x = half2single(packet->x[3]);
-    externalPosition.y = half2single(packet->y[3]);
-    externalPosition.z = half2single(packet->z[3]);
-    externalPosition.stdDev = EXTERNAL_MEASUREMENT_STDDEV;
-  
-    controlReference_t controlReference;
-    controlReference.xmode = header->controlModeX;
-    controlReference.ymode = header->controlModeY;
-    controlReference.zmode = header->controlModeZ;
-    controlReference.setEmergency = packet->header.setEmergency;
-    controlReference.resetEmergency = packet->header.resetEmergency;
-  
-    for (int i = 0; i<3; i++) { controlReference.x[i] = half2single(packet->x[i]); }
-    for (int i = 0; i<3; i++) { controlReference.y[i] = half2single(packet->y[i]); }
-    for (int i = 0; i<3; i++) { controlReference.z[i] = half2single(packet->z[i]); }
-    for (int i = 0; i<2; i++) { controlReference.yaw[i] = half2single(packet->yaw[i]); }
-    
-    xQueueOverwrite(externalPositionQueue, &externalPosition);
-    lastExternalPositionTimestamp = xTaskGetTickCount();
-    xQueueOverwrite(referenceQueue, &controlReference);
-    lastReferenceTimestamp = xTaskGetTickCount();
-  }
-  else
-  {
-    crtpControlPacket_t *packet = (crtpControlPacket_t *) pk->data;
-  
-    controlReference_t controlReference;
-    controlReference.xmode = header->controlModeX;
-    controlReference.ymode = header->controlModeY;
-    controlReference.zmode = header->controlModeZ;
-    controlReference.setEmergency = packet->header.setEmergency;
-    controlReference.resetEmergency = packet->header.resetEmergency;
-  
-    for (int i = 0; i<3; i++) { controlReference.x[i] = half2single(packet->x[i]); }
-    for (int i = 0; i<3; i++) { controlReference.y[i] = half2single(packet->y[i]); }
-    for (int i = 0; i<3; i++) { controlReference.z[i] = half2single(packet->z[i]); }
-    for (int i = 0; i<2; i++) { controlReference.yaw[i] = half2single(packet->yaw[i]); }
-  
-    xQueueOverwrite(referenceQueue, &controlReference);
-    lastReferenceTimestamp = xTaskGetTickCount();
-  }
-}
+  crtpControlPacket_t *packet = (crtpControlPacket_t *) pk->data;
 
+  controlReference_t controlReference;
+  controlReference.xmode = packet->header.controlModeX;
+  controlReference.ymode = packet->header.controlModeY;
+  controlReference.zmode = packet->header.controlModeZ;
+  controlReference.setEmergency = packet->header.setEmergency;
+  controlReference.resetEmergency = packet->header.resetEmergency;
 
-void stateControllerUpdateStateWithExternalPosition()
-{
-  // Only use position information if it's valid and recent
-  if ((xTaskGetTickCount() - lastExternalPositionTimestamp) < M2T(5)) {
-    // Get the updated position from the mocap
-    positionMeasurement_t externalPosition;
-    if (pdTRUE == xQueueReceive(externalPositionQueue, &externalPosition, 0))
-    {
-      stateEstimatorEnqueuePosition(&externalPosition);
-    }
-  }
+  for (int i = 0; i<3; i++) { controlReference.x[i] = half2single(packet->x[i]); }
+  for (int i = 0; i<3; i++) { controlReference.y[i] = half2single(packet->y[i]); }
+  for (int i = 0; i<3; i++) { controlReference.z[i] = half2single(packet->z[i]); }
+  controlReference.yaw = half2single(packet->yaw);
+  controlReference.p = half2single(packet->p);
+  controlReference.q = half2single(packet->q);
+  controlReference.r = half2single(packet->r);
+
+  xQueueOverwrite(referenceQueue, &controlReference);
+  lastReferenceTimestamp = xTaskGetTickCount();
 }
 
 bool stateControllerTest(void) { return true; }
-
-LOG_GROUP_START(ext_pos)
-  LOG_ADD(LOG_FLOAT, X, &ext_pos.x)
-  LOG_ADD(LOG_FLOAT, Y, &ext_pos.y)
-  LOG_ADD(LOG_FLOAT, Z, &ext_pos.z)
-LOG_GROUP_STOP(ext_pos)
 
 PARAM_GROUP_START(ctrlr)
 PARAM_ADD(PARAM_FLOAT, tau_xy, &tau_xy)

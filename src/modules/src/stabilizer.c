@@ -36,6 +36,7 @@
 
 #include "sensors.h"
 #include "power_distribution.h"
+#include "ext_position.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
@@ -48,7 +49,6 @@
 #else
 #include "commander.h"
 #include "controller.h"
-#include "ext_position.h"
 #include "sitaw.h"
 #endif
 
@@ -116,19 +116,15 @@ static void stabilizerTask(void* param)
   while(1) {
     vTaskDelayUntil(&lastWakeTime, F2T(RATE_MAIN_LOOP));
 
-#ifdef CONTROLLER_TYPE_new
-    stateControllerUpdateStateWithExternalPosition();
-#else
     getExtPosition(&state);
-#endif
-    
+
 #ifdef ESTIMATOR_TYPE_kalman
     stateEstimatorUpdate(&state, &sensorData, &control);
 #else
     sensorsAcquire(&sensorData, tick);
     stateEstimator(&state, &sensorData, tick);
 #endif
-    
+
 #ifdef CONTROLLER_TYPE_new
     stateControllerRun(&control, &sensorData, &state);
 #else

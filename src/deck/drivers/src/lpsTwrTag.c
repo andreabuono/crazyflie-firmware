@@ -50,6 +50,8 @@
   } rangingStats[LOCODECK_NR_OF_ANCHORS];
 #endif
 
+static float rangingStdDev = 0.25;
+
 // Rangin statistics
 static uint32_t rangingPerSec[LOCODECK_NR_OF_ANCHORS];
 static float rangingSuccessRate[LOCODECK_NR_OF_ANCHORS];
@@ -174,7 +176,7 @@ static uint32_t rxcallback(dwDevice_t *dev) {
         dist.x = options->anchorPosition[current_anchor].x;
         dist.y = options->anchorPosition[current_anchor].y;
         dist.z = options->anchorPosition[current_anchor].z;
-        dist.stdDev = 0.25;
+        dist.stdDev = rangingStdDev;
         stateEstimatorEnqueueDistance(&dist);
       }
 #endif
@@ -311,4 +313,5 @@ uwbAlgorithm_t uwbTwrTagAlgorithm = {
 LOG_GROUP_START(twr)
 LOG_ADD(LOG_FLOAT, rangingSuccessRate0, &rangingSuccessRate[0])
 LOG_ADD(LOG_UINT32, rangingPerSec0, &rangingPerSec[0])
+LOG_ADD(LOG_FLOAT, stddev, &rangingStdDev)
 LOG_GROUP_STOP(twr)

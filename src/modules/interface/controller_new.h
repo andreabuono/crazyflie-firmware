@@ -23,10 +23,8 @@
 void stateControllerInit(void);
 bool stateControllerTest(void);
 void stateControllerRun(control_t *control, const sensorData_t *sensors, const state_t *state);
-void stateControllerUpdateStateWithExternalPosition();
 
 #define CONTROL_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
-#define EXTERNAL_MEASUREMENT_STDDEV (0.005)
 
 #define CONTROLMODE_ACCELERATION(mode) ((0b001 & mode) != 0)
 #define CONTROLMODE_VELOCITY(mode)     ((0b010 & mode) != 0)
@@ -39,11 +37,11 @@ typedef struct {
   float x[3];
   float y[3];
   float z[3];
-  float yaw[2];
+  float yaw;
+  float p, q, r;
 } controlReference_t;
 
 typedef struct {
-  uint16_t packetHasExternalReference:1;
   uint16_t setEmergency:1;
   uint16_t resetEmergency:1;
   uint16_t controlModeX:3;
@@ -55,17 +53,9 @@ typedef struct {
 typedef struct
 {
   crtpControlPacketHeader_t header; // size 2
-  uint16_t x[3];
-  uint16_t y[3];
-  uint16_t z[3];
-  uint16_t yaw[2];
+  uint16_t x[3]; //x pos, vel, acc
+  uint16_t y[3]; //y pos, vel, acc
+  uint16_t z[3]; //z pos, vel, acc
+  uint16_t yaw; // yaw angle
+  uint16_t p, q, r; // body-rate feed forward
 } __attribute__((packed)) crtpControlPacket_t;
-
-typedef struct
-{
-  crtpControlPacketHeader_t header; // size 2
-  uint16_t x[4];
-  uint16_t y[4];
-  uint16_t z[4];
-  uint16_t yaw[2];
-} __attribute__((packed)) crtpControlPacketWithExternalPosition_t;

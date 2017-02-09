@@ -1140,7 +1140,7 @@ static void stateEstimatorExternalizeState(state_t *state, sensorData_t *sensors
       .z = q[3]
   };
 
-  
+
   Sx16 = single2half(S[STATE_X]);
   Sy16 = single2half(S[STATE_Y]);
   Sz16 = single2half(S[STATE_Z]);
