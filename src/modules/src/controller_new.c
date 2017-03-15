@@ -72,13 +72,13 @@ static float coll_max = 18;
 // if too much thrust is commanded, which axis is reduced to meet maximum thrust?
 // 1 -> even reduction across x, y, z
 // 0 -> z gets what it wants (eg. maintain height at all costs)
-static float thrust_reduction_fairness = 0.25;
+static float thrust_reduction_fairness = 0.05;
 
 // minimum and maximum body rates
 static float omega_rp_max = 30;
 static float omega_yaw_max = 10;
-static float heuristic_rp = 12;
-static float heuristic_yaw = 5;
+static float heuristic_rp = 30;
+static float heuristic_yaw = 10;
 
 static uint32_t lastReferenceTimestamp;
 static xQueueHandle referenceQueue;
