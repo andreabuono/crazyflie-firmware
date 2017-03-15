@@ -57,18 +57,20 @@
  * Enable 250Hz digital LPF mode. However does not work with
  * multiple slave reading through MPU9250 (MAG and BARO), only single for some reason.
  */
-//#define SENSORS_MPU6500_DLPF_256HZ
+#define SENSORS_MPU6500_DLPF_256HZ
 
+#ifndef SENSORS_MPU6500_DLPF_256HZ
 #define SENSORS_ENABLE_PRESSURE_LPS25H
-
 #define SENSORS_ENABLE_MAG_AK8963
+#endif
+
 #define MAG_GAUSS_PER_LSB     666.7f
 
 #define SENSORS_GYRO_FS_CFG       MPU6500_GYRO_FS_2000
 #define SENSORS_DEG_PER_LSB_CFG   MPU6500_DEG_PER_LSB_2000
 
-#define SENSORS_ACCEL_FS_CFG      MPU6500_ACCEL_FS_16
-#define SENSORS_G_PER_LSB_CFG     MPU6500_G_PER_LSB_16
+#define SENSORS_ACCEL_FS_CFG      MPU6500_ACCEL_FS_4
+#define SENSORS_G_PER_LSB_CFG     MPU6500_G_PER_LSB_4
 
 #define SENSORS_VARIANCE_MAN_TEST_TIMEOUT M2T(2000) // Timeout in ms
 #define SENSORS_MAN_TEST_LEVEL_MAX        5.0f      // Max degrees off
@@ -89,7 +91,7 @@
 // Number of samples used in variance calculation. Changing this effects the threshold
 #define SENSORS_NBR_OF_BIAS_SAMPLES     1024
 // Variance threshold to take zero bias for gyro
-#define GYRO_VARIANCE_BASE          5000
+#define GYRO_VARIANCE_BASE          10000
 #define GYRO_VARIANCE_THRESHOLD_X   (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Y   (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Z   (GYRO_VARIANCE_BASE)
@@ -122,8 +124,8 @@ static float accScaleSum = 0;
 static float accScale = 1;
 
 // Low Pass filtering
-#define GYRO_LPF_CUTOFF_FREQ  80
-#define ACCEL_LPF_CUTOFF_FREQ 30
+#define GYRO_LPF_CUTOFF_FREQ  180
+#define ACCEL_LPF_CUTOFF_FREQ 180
 static lpf2pData accLpf[3];
 static lpf2pData gyroLpf[3];
 static void applyAxis3fLpf(lpf2pData *data, Axis3f* in);
@@ -149,7 +151,7 @@ static void processMagnetometerMeasurements(const uint8_t *buffer);
 static void processBarometerMeasurements(const uint8_t *buffer);
 static void sensorsSetupSlaveRead(void);
 
-#ifdef GYRO_GYRO_BIAS_LIGHT_WEIGHT
+#ifdef GYRO_BIAS_LIGHT_WEIGHT
 static bool processGyroBiasNoBuffer(int16_t gx, int16_t gy, int16_t gz, Axis3f *gyroBiasOut);
 #else
 static bool processGyroBias(int16_t gx, int16_t gy, int16_t gz,  Axis3f *gyroBiasOut);
@@ -197,8 +199,6 @@ bool sensorsAreCalibrated() {
 static void sensorsTask(void *param)
 {
   systemWaitStart();
-
-  sensorsSetupSlaveRead();
 
   while (1)
   {
@@ -337,35 +337,41 @@ static void sensorsDeviceInit(void)
   mpu6500SetTempSensorEnabled(true);
   // Disable interrupts
   mpu6500SetIntEnabled(false);
-  // Connect the MAG and BARO to the main I2C bus
-  mpu6500SetI2CBypassEnabled(true);
+
+  mpu6500SetI2CBypassEnabled(false);
+
   // Set gyro full scale range
   mpu6500SetFullScaleGyroRange(SENSORS_GYRO_FS_CFG);
   // Set accelerometer full scale range
   mpu6500SetFullScaleAccelRange(SENSORS_ACCEL_FS_CFG);
-  // Set accelerometer digital low-pass bandwidth
-  mpu6500SetAccelDLPF(MPU6500_ACCEL_DLPF_BW_41);
 
-#if SENSORS_MPU6500_DLPF_256HZ
+#ifdef SENSORS_MPU6500_DLPF_256HZ
   // 256Hz digital low-pass filter only works with little vibrations
   // Set output rate (15): 8000 / (1 + 7) = 1000Hz
   mpu6500SetRate(7);
   // Set digital low-pass bandwidth
   mpu6500SetDLPFMode(MPU6500_DLPF_BW_256);
+  // Set accelerometer digital low-pass bandwidth
+  mpu6500SetAccelDLPF(MPU6500_ACCEL_DLPF_BW_460);
 #else
   // To low DLPF bandwidth might cause instability and decrease agility
   // but it works well for handling vibrations and unbalanced propellers
   // Set output rate (1): 1000 / (1 + 0) = 1000Hz
   mpu6500SetRate(0);
+
   // Set digital low-pass bandwidth for gyro
-  mpu6500SetDLPFMode(MPU6500_DLPF_BW_98);
-  // Init second order filer for accelerometer
+  mpu6500SetDLPFMode(MPU6500_DLPF_BW_188);
+
+  // Set accelerometer digital low-pass bandwidth
+  mpu6500SetAccelDLPF(MPU6500_ACCEL_DLPF_BW_184);
+#endif
+
+  // Init second order filer for accelerometer and gyro
   for (uint8_t i = 0; i < 3; i++)
   {
     lpf2pInit(&gyroLpf[i], 1000, GYRO_LPF_CUTOFF_FREQ);
     lpf2pInit(&accLpf[i],  1000, ACCEL_LPF_CUTOFF_FREQ);
   }
-#endif
 
 
 #ifdef SENSORS_ENABLE_MAG_AK8963
@@ -410,19 +416,10 @@ static void sensorsSetupSlaveRead(void)
 #ifdef SENSORS_MPU6500_DLPF_256HZ
   // As noted in registersheet 4.4: "Data should be sampled at or above sample rate;
   // SMPLRT_DIV is only used for 1kHz internal sampling." Slowest update rate is then 500Hz.
-  mpu6500SetSlave4MasterDelay(15); // read slaves at 500Hz = (8000Hz / (1 + 15))
+  // mpu6500SetSlave4MasterDelay(15); // read slaves at 500Hz = (8000Hz / (1 + 15))
 #else
   mpu6500SetSlave4MasterDelay(9); // read slaves at 100Hz = (500Hz / (1 + 4))
 #endif
-
-  mpu6500SetI2CBypassEnabled(false);
-  mpu6500SetWaitForExternalSensorEnabled(true); // the slave data isn't so important for the state estimation
-  mpu6500SetInterruptMode(0); // active high
-  mpu6500SetInterruptDrive(0); // push pull
-  mpu6500SetInterruptLatch(0); // latched until clear
-  mpu6500SetInterruptLatchClear(1); // cleared on any register read
-  mpu6500SetSlaveReadWriteTransitionEnabled(false); // Send a stop at the end of a slave read
-  mpu6500SetMasterClockSpeed(13); // Set i2c speed to 400kHz
 
 #ifdef SENSORS_ENABLE_MAG_AK8963
   if (isMagnetometerPresent)
@@ -457,9 +454,14 @@ static void sensorsSetupSlaveRead(void)
 #endif
 
   // Enable sensors after configuration
+#if defined(SENSORS_ENABLE_MAG_AK8963) || defined(SENSORS_ENABLE_PRESSURE_LPS25H)
+  mpu6500SetWaitForExternalSensorEnabled(true); // the slave data isn't so important for the state estimation
+  mpu6500SetSlaveReadWriteTransitionEnabled(false); // Send a stop at the end of a slave read
   mpu6500SetI2CMasterModeEnabled(true);
-
-  mpu6500SetIntDataReadyEnabled(true);
+#else
+  mpu6500SetWaitForExternalSensorEnabled(false); // the slave data isn't so important for the state estimation
+  mpu6500SetI2CMasterModeEnabled(false);
+#endif
 }
 
 static void sensorsTaskInit(void)
@@ -474,6 +476,13 @@ static void sensorsTaskInit(void)
 
 static void sensorsInterruptInit(void)
 {
+  mpu6500SetInterruptMode(0); // active high
+  mpu6500SetInterruptDrive(0); // push pull
+  mpu6500SetInterruptLatch(0); // latched until clear
+  mpu6500SetInterruptLatchClear(1); // cleared on any register read
+  mpu6500SetMasterClockSpeed(13); // Set i2c speed to 400kHz
+  mpu6500SetIntDataReadyEnabled(true);
+
   GPIO_InitTypeDef GPIO_InitStructure;
   EXTI_InitTypeDef EXTI_InitStructure;
 
@@ -515,6 +524,7 @@ void sensorsInit(void)
 
   sensorsBiasObjInit(&gyroBiasRunning);
   sensorsDeviceInit();
+  sensorsSetupSlaveRead();
   sensorsInterruptInit();
   sensorsTaskInit();
 
