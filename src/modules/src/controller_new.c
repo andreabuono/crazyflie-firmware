@@ -51,19 +51,21 @@
 // tau is a time constant, lower -> more aggressive control (weight on position error)
 // zeta is a damping factor, higher -> more damping (weight on velocity error)
 
-static float tau_xy = 0.3;
+static float tau_xy = 0.4;
 static float zeta_xy = 0.85; // this gives good performance down to 0.4, the lower the more aggressive (less damping)
 
-static float tau_z = 0.3;
-static float zeta_z = 0.85;
+static float tau_z = 0.2;
+static float zeta_z = 0.55;
 
 // time constant of body angle (thrust direction) control
-static float tau_rp = 0.25;
+// static float tau_rp = 0.25;
+static float tau_rp = 0.2;
 // what percentage is yaw control speed in terms of roll/pitch control speed \in [0, 1], 0 means yaw not controlled
 static float mixing_factor = 1.0;
 
 // time constant of rotational rate control
-static float tau_rp_rate = 0.015;
+static float tau_rp_rate = 0.0075;
+// static float tau_rp_rate = 0.015;
 static float tau_yaw_rate = 0.0075;
 
 // minimum and maximum thrusts
@@ -138,7 +140,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
   omega[2] = radians(sensors->gyro.z);
 
   // update at the CONTROL_RATE (100Hz)
-  if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > configTICK_RATE_HZ/CONTROL_RATE)
+  if (referenceReceived || (xTaskGetTickCount()-lastControlUpdate) > F2T(CONTROL_RATE))
   {
     lastControlUpdate = xTaskGetTickCount();
 
@@ -460,6 +462,29 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
     control->omega[1] /= scaling;
     control->omega[2] /= scaling;
     control->thrust = collCmd;
+
+    // // ====== CALIBRATION ======
+
+    // if (IS_CALIBRATING && IS_INFLIGHT) {
+    //   float filterConstant = expf(-1.0f/(CALIBRATION_MOTORCONSTANT*CONTROL_RATE));
+
+    //   // desired thrust is G
+    //   // float desiredThrust = GRAVITY*CRAZYFLIE_MASS;
+    //   // THRUST_BIAS = filterConstant*THRUST_BIAS + (1.0f-filterConstant)*(control->thrust-desiredThrust);
+
+    //   for (int i=0; i<3; i++) {
+    //     // desired omega is 0
+    //     OMEGA_BIAS[i] = filterConstant*OMEGA_BIAS[i] + (1.0f-filterConstant)*control->omega[i];
+    //   }
+    // }
+
+    // ====== COMPENSATION ======
+
+    // control->thrust += THRUST_BIAS;
+    for (int i=0; i<3; i++) {
+      control->omega[i] += OMEGA_BIAS[i];
+    }
+
   }
 
   // control the body torques
@@ -472,6 +497,7 @@ void stateControllerRun(control_t *control, const sensorData_t *sensors, const s
 
   // update the commanded body torques based on the current error in body rates
   mat_mult(&CRAZYFLIE_INERTIA_m, &omegaErr_m, &torques_m);
+
 }
 
 

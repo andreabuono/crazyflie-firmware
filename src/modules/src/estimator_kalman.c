@@ -172,10 +172,6 @@ static inline bool stateEstimatorHasTOFPacket(tofMeasurement_t *tof) {
 #define PREDICT_RATE RATE_100_HZ // this is slower than the IMU update rate of 500Hz
 #define BARO_RATE RATE_25_HZ
 
-// the point at which the dynamics change from stationary to flying
-#define IN_FLIGHT_THRUST_THRESHOLD (GRAVITY*0.1f)
-#define IN_FLIGHT_TIME_THRESHOLD (500)
-
 // the reversion of pitch and roll to zero
 #define ROLLPITCH_ZERO_REVERSION (0)//1e-4f)
 
@@ -194,14 +190,16 @@ static const float stdDevInitialVelocity = 0.01;
 static const float stdDevInitialAttitude_rollpitch = 0.01;
 static const float stdDevInitialAttitude_yaw = 0.1;
 
-static float procNoiseAcc_xy = 0.5f;
-static float procNoiseAcc_z = 1.5f;
+static float procNoiseAcc_x = 1.7f;
+static float procNoiseAcc_y = 1.7f;
+static float procNoiseAcc_z = 1.7f;
 static float procNoiseVel = 0;
 static float procNoisePos = 0;
 static float procNoiseAtt = 0;
 static float measNoiseBaro = 2.0f; // meters
-static float measNoiseGyro_rollpitch = 0.1f; // radians per second
-static float measNoiseGyro_yaw = 0.25f; // radians per second
+static float measNoiseGyro_x = 0.2f; // radians per second
+static float measNoiseGyro_y = 0.2f; // radians per second
+static float measNoiseGyro_z = 0.2f; // radians per second
 static float dragXY = 0.19f;
 static float dragZ = 0.05f;
 
@@ -256,11 +254,15 @@ static uint32_t accAccumulatorCount;
 static uint32_t thrustAccumulatorCount;
 static uint32_t gyroAccumulatorCount;
 static uint32_t baroAccumulatorCount;
-static bool quadIsFlying = false;
 static int32_t lastTDOAUpdate;
-static uint32_t lastFlightCmd;
-static uint32_t takeoffTime;
 static uint32_t tdoaCount;
+
+static Axis3f accCalibrationVariance;
+static Axis3f accCalibrationBias;
+static uint32_t accCalibrationSampleCount;
+static Axis3f gyroCalibrationVariance;
+static Axis3f gyroCalibrationBias;
+static uint32_t gyroCalibrationSampleCount;
 
 /**
  * Supporting and utility functions
@@ -341,17 +343,73 @@ void stateEstimatorUpdate(state_t *state, sensorData_t *sensors, control_t *cont
   // slower than the IMU loop, but the IMU information is required externally at
   // a higher rate (for body rate control).
   if (sensorsReadAcc(&sensors->acc)) {
-    accAccumulator.x += GRAVITY*sensors->acc.x; // accelerometer is in Gs
-    accAccumulator.y += GRAVITY*sensors->acc.y; // but the estimator requires ms^-2
-    accAccumulator.z += GRAVITY*sensors->acc.z;
+    accAccumulator.x += sensors->acc.x; // accelerometer is in Gs
+    accAccumulator.y += sensors->acc.y; // but the estimator requires ms^-2
+    accAccumulator.z += sensors->acc.z;
     accAccumulatorCount++;
+
+    if (IS_CALIBRATING) {
+      accCalibrationBias.x += sensors->acc.x;
+      accCalibrationVariance.x += sensors->acc.x*sensors->acc.x;
+
+      accCalibrationBias.y += sensors->acc.y;
+      accCalibrationVariance.y += sensors->acc.y*sensors->acc.y;
+
+      accCalibrationBias.z += sensors->acc.z;
+      accCalibrationVariance.z += sensors->acc.z*sensors->acc.z;
+
+      accCalibrationSampleCount++;
+    }
   }
 
   if (sensorsReadGyro(&sensors->gyro)) {
-    gyroAccumulator.x += radians(sensors->gyro.x); // gyro is in deg/sec
-    gyroAccumulator.y += radians(sensors->gyro.y); // but the estimator requires rad/sec
-    gyroAccumulator.z += radians(sensors->gyro.z);
+    gyroAccumulator.x += sensors->gyro.x; // gyro is in deg/sec
+    gyroAccumulator.y += sensors->gyro.y; // but the estimator requires rad/sec
+    gyroAccumulator.z += sensors->gyro.z;
     gyroAccumulatorCount++;
+
+    if (IS_CALIBRATING) {
+      gyroCalibrationBias.x += radians(sensors->gyro.x);
+      gyroCalibrationVariance.x += radians(sensors->gyro.x)*radians(sensors->gyro.x);
+
+      gyroCalibrationBias.y += radians(sensors->gyro.y);
+      gyroCalibrationVariance.y += radians(sensors->gyro.y)*radians(sensors->gyro.y);
+
+      gyroCalibrationBias.z += radians(sensors->gyro.z);
+      gyroCalibrationVariance.z += radians(sensors->gyro.z)*radians(sensors->gyro.z);
+
+      gyroCalibrationSampleCount++;
+    }
+  }
+
+  if (FINISHED_CALIBRATING && gyroCalibrationSampleCount>0) {
+    GYRO_BIAS.x = gyroCalibrationBias.x/gyroCalibrationSampleCount;
+    GYRO_BIAS.y = gyroCalibrationBias.y/gyroCalibrationSampleCount;
+    GYRO_BIAS.z = gyroCalibrationBias.z/gyroCalibrationSampleCount;
+
+    GYRO_VARIANCE.x = gyroCalibrationVariance.x/gyroCalibrationSampleCount - GYRO_BIAS.x*GYRO_BIAS.x;
+    GYRO_VARIANCE.y = gyroCalibrationVariance.y/gyroCalibrationSampleCount - GYRO_BIAS.y*GYRO_BIAS.y;
+    GYRO_VARIANCE.z = gyroCalibrationVariance.z/gyroCalibrationSampleCount - GYRO_BIAS.z*GYRO_BIAS.z;
+
+    gyroCalibrationSampleCount = 0;
+    gyroCalibrationBias.x = gyroCalibrationBias.y = gyroCalibrationBias.z = 0;
+    gyroCalibrationVariance.x = gyroCalibrationVariance.y = gyroCalibrationVariance.z = 0;
+  }
+
+  if (FINISHED_CALIBRATING && accCalibrationSampleCount>0) {
+    ACC_BIAS.x = accCalibrationBias.x/accCalibrationSampleCount;
+    ACC_BIAS.y = accCalibrationBias.y/accCalibrationSampleCount;
+    ACC_BIAS.z = accCalibrationBias.z/accCalibrationSampleCount;
+
+    ACC_VARIANCE.x = accCalibrationVariance.x/accCalibrationSampleCount - ACC_BIAS.x*ACC_BIAS.x;
+    ACC_VARIANCE.y = accCalibrationVariance.y/accCalibrationSampleCount - ACC_BIAS.y*ACC_BIAS.y;
+    ACC_VARIANCE.z = accCalibrationVariance.z/accCalibrationSampleCount - ACC_BIAS.z*ACC_BIAS.z;
+
+    ACC_BIAS.z -= 1.0f;
+
+    accCalibrationSampleCount = 0;
+    accCalibrationBias.x = accCalibrationBias.y = accCalibrationBias.z = 0;
+    accCalibrationVariance.x = accCalibrationVariance.y = accCalibrationVariance.z = 0;
   }
 
   if (sensorsReadMag(&sensors->mag)) {
@@ -363,7 +421,7 @@ void stateEstimatorUpdate(state_t *state, sensorData_t *sensors, control_t *cont
   thrustAccumulatorCount++;
 
   // Run the system dynamics to predict the state forward.
-  if ((tick-lastPrediction) >= configTICK_RATE_HZ/PREDICT_RATE // update at the PREDICT_RATE
+  if ((tick-lastPrediction) >= F2T(PREDICT_RATE) // update at the PREDICT_RATE
       && gyroAccumulatorCount > 0
       && accAccumulatorCount > 0
       && thrustAccumulatorCount > 0)
@@ -378,10 +436,38 @@ void stateEstimatorUpdate(state_t *state, sensorData_t *sensors, control_t *cont
 
     thrustAccumulator /= thrustAccumulatorCount;
 
+    // if (IS_CALIBRATING && IS_INFLIGHT) {
+    //   float filterConstant = expf(-1.0f/(CALIBRATION_IMUCONSTANT*PREDICT_RATE));
+
+    //   accAccumulator.z  -= 1.0f; // remove gravity, such that in steady state we just have the axis biases
+
+    //   accAccumulator.axis[2]  += ACC_BIAS.axis[2];
+    //   ACC_BIAS.axis[2] = filterConstant*ACC_BIAS.axis[2] + (1.0f-filterConstant)*accAccumulator.axis[2];
+    //   accAccumulator.axis[2]  -= ACC_BIAS.axis[2];
+
+    //   // for(int i=0; i<3; i++) {
+    //   //   gyroAccumulator.axis[i] += GYRO_BIAS.axis[i];
+    //   //   GYRO_BIAS.axis[i] = filterConstant*GYRO_BIAS.axis[i] + (1.0f-filterConstant)*gyroAccumulator.axis[i];
+    //   //   gyroAccumulator.axis[i] -= GYRO_BIAS.axis[i];
+    //   // }
+
+    //   //   accAccumulator.axis[i]  += ACC_BIAS.axis[i];
+    //   //   ACC_BIAS.axis[i] = filterConstant*ACC_BIAS.axis[i] + (1.0f-filterConstant)*accAccumulator.axis[i];
+    //   //   accAccumulator.axis[i]  -= ACC_BIAS.axis[i];
+    //   // }
+
+    //   accAccumulator.z  += 1.0f; // add gravity, such that in steady state we just have the axis biases
+    // }
+
+    for(int i=0; i<3; i++) {
+        gyroAccumulator.axis[i] = radians(gyroAccumulator.axis[i]);
+        accAccumulator.axis[i] *= GRAVITY;
+    }
+
     float dt = (float)(tick-lastPrediction)/configTICK_RATE_HZ;
     stateEstimatorPredict(thrustAccumulator, &accAccumulator, &gyroAccumulator, dt);
 
-    if (!quadIsFlying) { // accelerometers give us information about attitude on slanted ground
+    if (!IS_INFLIGHT) { // accelerometers give us information about attitude on slanted ground
       stateEstimatorUpdateWithAccOnGround(&accAccumulator);
     }
 
@@ -631,19 +717,12 @@ static void stateEstimatorPredict(float cmdThrust, Axis3f *acc, Axis3f *gyro, fl
 
   // TODO: Find a better check for whether the quad is flying
   // Assume that the flight begins when the thrust is large enough and for now we never stop "flying".
-  if (cmdThrust > IN_FLIGHT_THRUST_THRESHOLD) {
-    lastFlightCmd = xTaskGetTickCount();
-    if (!quadIsFlying) {
-      takeoffTime = lastFlightCmd;
-    }
-  }
-  quadIsFlying = (xTaskGetTickCount()-lastFlightCmd) < IN_FLIGHT_TIME_THRESHOLD;
 
   float dx, dy, dz;
   float tmpSPX, tmpSPY, tmpSPZ;
   float zacc;
 
-  if (quadIsFlying) // only acceleration in z direction
+  if (IS_INFLIGHT) // only acceleration in z direction
   {
     // TODO: In the next lines, can either use cmdThrust/mass, or acc->z. Need to test which is more reliable.
     // cmdThrust's error comes from poorly calibrated mass, and inexact cmdThrust -> thrust map
@@ -729,17 +808,17 @@ static void stateEstimatorAddProcessNoise(float dt)
 {
   if (dt>0)
   {
-    P[STATE_X][STATE_X] += powf(procNoiseAcc_xy*dt*dt + procNoiseVel*dt + procNoisePos, 2);  // add process noise on position
-    P[STATE_Y][STATE_Y] += powf(procNoiseAcc_xy*dt*dt + procNoiseVel*dt + procNoisePos, 2);  // add process noise on position
+    P[STATE_X][STATE_X] += powf(procNoiseAcc_x*dt*dt + procNoiseVel*dt + procNoisePos, 2);  // add process noise on position
+    P[STATE_Y][STATE_Y] += powf(procNoiseAcc_y*dt*dt + procNoiseVel*dt + procNoisePos, 2);  // add process noise on position
     P[STATE_Z][STATE_Z] += powf(procNoiseAcc_z*dt*dt + procNoiseVel*dt + procNoisePos, 2);  // add process noise on position
 
-    P[STATE_PX][STATE_PX] += powf(procNoiseAcc_xy*dt + procNoiseVel, 2); // add process noise on velocity
-    P[STATE_PY][STATE_PY] += powf(procNoiseAcc_xy*dt + procNoiseVel, 2); // add process noise on velocity
+    P[STATE_PX][STATE_PX] += powf(procNoiseAcc_x*dt + procNoiseVel, 2); // add process noise on velocity
+    P[STATE_PY][STATE_PY] += powf(procNoiseAcc_y*dt + procNoiseVel, 2); // add process noise on velocity
     P[STATE_PZ][STATE_PZ] += powf(procNoiseAcc_z*dt + procNoiseVel, 2); // add process noise on velocity
 
-    P[STATE_D0][STATE_D0] += powf(measNoiseGyro_rollpitch * dt + procNoiseAtt, 2);
-    P[STATE_D1][STATE_D1] += powf(measNoiseGyro_rollpitch * dt + procNoiseAtt, 2);
-    P[STATE_D2][STATE_D2] += powf(measNoiseGyro_yaw * dt + procNoiseAtt, 2);
+    P[STATE_D0][STATE_D0] += powf(measNoiseGyro_x * dt + procNoiseAtt, 2);
+    P[STATE_D1][STATE_D1] += powf(measNoiseGyro_y * dt + procNoiseAtt, 2);
+    P[STATE_D2][STATE_D2] += powf(measNoiseGyro_z * dt + procNoiseAtt, 2);
   }
 
   for (int i=0; i<STATE_DIM; i++) {
@@ -862,7 +941,7 @@ static void stateEstimatorUpdateWithBaro(baro_t *baro)
 
   h[STATE_Z] = 1;
 
-  if (!quadIsFlying || baroReferenceHeight < 1) {
+  if (!IS_INFLIGHT || baroReferenceHeight < 1) {
     //TODO: maybe we could track the zero height as a state. Would be especially useful if UWB anchors had barometers.
     baroReferenceHeight = baro->asl;
   }
@@ -1275,7 +1354,6 @@ bool stateEstimatorTest(void)
 }
 
 LOG_GROUP_START(measured)
-  LOG_ADD(LOG_UINT8, inFlight, &quadIsFlying)
   LOG_ADD(LOG_FLOAT, x, &S[STATE_X])
   LOG_ADD(LOG_FLOAT, y, &S[STATE_Y])
   LOG_ADD(LOG_FLOAT, z, &S[STATE_Z])
@@ -1296,14 +1374,16 @@ LOG_GROUP_STOP(measured)
 
 PARAM_GROUP_START(kalman)
   PARAM_ADD(PARAM_UINT8, resetEstimation, &resetEstimation)
-  PARAM_ADD(PARAM_FLOAT, pNAcc_xy, &procNoiseAcc_xy)
+  PARAM_ADD(PARAM_FLOAT, pNAcc_x, &procNoiseAcc_x)
+  PARAM_ADD(PARAM_FLOAT, pNAcc_y, &procNoiseAcc_y)
   PARAM_ADD(PARAM_FLOAT, pNAcc_z, &procNoiseAcc_z)
   PARAM_ADD(PARAM_FLOAT, pNVel, &procNoiseVel)
   PARAM_ADD(PARAM_FLOAT, pNPos, &procNoisePos)
   PARAM_ADD(PARAM_FLOAT, pNAtt, &procNoiseAtt)
   PARAM_ADD(PARAM_FLOAT, mNBaro, &measNoiseBaro)
-  PARAM_ADD(PARAM_FLOAT, mNGyro_rollpitch, &measNoiseGyro_rollpitch)
-  PARAM_ADD(PARAM_FLOAT, mNGyro_yaw, &measNoiseGyro_yaw)
+  PARAM_ADD(PARAM_FLOAT, mNGyro_x, &measNoiseGyro_x)
+  PARAM_ADD(PARAM_FLOAT, mNGyro_y, &measNoiseGyro_y)
+  PARAM_ADD(PARAM_FLOAT, mNGyro_z, &measNoiseGyro_z)
   PARAM_ADD(PARAM_FLOAT, drag_xy, &dragXY)
   PARAM_ADD(PARAM_FLOAT, drag_z, &dragZ)
 PARAM_GROUP_STOP(kalman)

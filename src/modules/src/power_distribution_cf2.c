@@ -65,6 +65,7 @@ void powerDistribution(const control_t *control)
   if (!control->enable || control->thrust * CRAZYFLIE_MASS < SHUTOFF_THRUST) {
     lastEnableTime = xTaskGetTickCount();
     enabled = false;
+    IS_INFLIGHT = false;
     motorsSetRatio(MOTOR_M1, 0);
     motorsSetRatio(MOTOR_M2, 0);
     motorsSetRatio(MOTOR_M3, 0);
@@ -81,27 +82,40 @@ void powerDistribution(const control_t *control)
     return;
   }
 
+  IS_INFLIGHT = true;
+
   // otherwise enable the motors and calculate required commands
   enabled = true;
-  
+
   float motor_forces[4] = {0};
   ThrustForce = control->thrust * CRAZYFLIE_MASS; // force to provide control->thrust
   YawForce = control->torque[2] / THRUST_TO_TORQUE_m; // force to provide z torque
-  
+
   #ifdef QUAD_FORMATION_X
   RollForce =  control->torque[0] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide x torque
   PitchForce = control->torque[1] / (CRAZYFLIE_ARM_LENGTH * .707106781f); // force to provide y torque
-  
+
   motor_forces[0] = ThrustForce/4.0f - RollForce/4.0f - PitchForce/4.0f - YawForce/4.0f;
   motor_forces[1] = ThrustForce/4.0f - RollForce/4.0f + PitchForce/4.0f + YawForce/4.0f;
   motor_forces[2] = ThrustForce/4.0f + RollForce/4.0f + PitchForce/4.0f - YawForce/4.0f;
   motor_forces[3] = ThrustForce/4.0f + RollForce/4.0f - PitchForce/4.0f + YawForce/4.0f;
-    
+
   #else // TODO: QUAD_FORMATION_NORMAL
 
   #endif
-  
+
+  // if (IS_CALIBRATING) { //quad is hovering, meaning real prop force should be the same, and should equal gravity
+  //   float desiredForcePerProp = GRAVITY*CRAZYFLIE_MASS/4.0f;
+  //   float filterConstant = expf(-1.0f/(CALIBRATION_MOTORCONSTANT*RATE_MAIN_LOOP));
+
+  //   for(int i=0; i<4; i++) {
+  //     float requiredScaling = motor_forces[i]/desiredForcePerProp;
+  //     MOTOR_SCALE[i] = filterConstant*MOTOR_SCALE[i] + (1.0f-filterConstant)*requiredScaling;
+  //   }
+  // }
+
   for (int i=0; i<4; i++) {
+    motor_forces[i] = motor_forces[i] * MOTOR_SCALE[i];
     if (motor_forces[i] < 0) {
       motor_forces[i] = 0;
       motor_pwm[i] = 0;
@@ -109,7 +123,7 @@ void powerDistribution(const control_t *control)
       motor_pwm[i] = (-PWM_TO_THRUST_b + arm_sqrt(PWM_TO_THRUST_b*PWM_TO_THRUST_b + 4.0f * PWM_TO_THRUST_a * motor_forces[i])) /
                      (2.0f * PWM_TO_THRUST_a);
     }
-    
+
     motor_pwm[i] = constrain(motor_pwm[i], 0.1, 1); // keep the motor spinning by lower-bounding with 0.1, otherwise motor friction plays a big role in performance
     motorsSetRatio(i, (uint16_t)(65535*motor_pwm[i]));
   }

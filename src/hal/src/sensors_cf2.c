@@ -53,6 +53,8 @@
 #include "sound.h"
 #include "filter.h"
 
+#include "physical_constants.h"
+
 /**
  * Enable 250Hz digital LPF mode. However does not work with
  * multiple slave reading through MPU9250 (MAG and BARO), only single for some reason.
@@ -89,9 +91,9 @@
 #define GYRO_NBR_OF_AXES            3
 #define GYRO_MIN_BIAS_TIMEOUT_MS    M2T(1*1000)
 // Number of samples used in variance calculation. Changing this effects the threshold
-#define SENSORS_NBR_OF_BIAS_SAMPLES     1024
+#define SENSORS_NBR_OF_BIAS_SAMPLES     2048
 // Variance threshold to take zero bias for gyro
-#define GYRO_VARIANCE_BASE          10000
+#define GYRO_VARIANCE_BASE          15000
 #define GYRO_VARIANCE_THRESHOLD_X   (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Y   (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Z   (GYRO_VARIANCE_BASE)
@@ -115,17 +117,15 @@ static bool isInit = false;
 static sensorData_t sensors;
 
 static BiasObj gyroBiasRunning;
-static Axis3f  gyroBias;
 #if defined(SENSORS_GYRO_BIAS_CALCULATE_STDDEV) && defined (GYRO_BIAS_LIGHT_WEIGHT)
 static Axis3f  gyroBiasStdDev;
 #endif
-static bool    gyroBiasFound = false;
+static bool  gyroBiasFound = false;
 static float accScaleSum = 0;
-static float accScale = 1;
 
 // Low Pass filtering
-#define GYRO_LPF_CUTOFF_FREQ  180
-#define ACCEL_LPF_CUTOFF_FREQ 180
+#define GYRO_LPF_CUTOFF_FREQ  240
+#define ACCEL_LPF_CUTOFF_FREQ 100
 static lpf2pData accLpf[3];
 static lpf2pData gyroLpf[3];
 static void applyAxis3fLpf(lpf2pData *data, Axis3f* in);
@@ -276,32 +276,43 @@ void processAccGyroMeasurements(const uint8_t *buffer)
   // Note the ordering to correct the rotated 90º IMU coordinate system
   int16_t ay = (((int16_t) buffer[0]) << 8) | buffer[1];
   int16_t ax = (((int16_t) buffer[2]) << 8) | buffer[3];
+  ax = -ax; // mounting direction is backwards
   int16_t az = (((int16_t) buffer[4]) << 8) | buffer[5];
   int16_t gy = (((int16_t) buffer[8]) << 8) | buffer[9];
   int16_t gx = (((int16_t) buffer[10]) << 8) | buffer[11];
+  gx = -gx; // mounting direction is backwards
   int16_t gz = (((int16_t) buffer[12]) << 8) | buffer[13];
 
 
 #ifdef GYRO_BIAS_LIGHT_WEIGHT
-  gyroBiasFound = processGyroBiasNoBuffer(gx, gy, gz, &gyroBias);
+  gyroBiasFound = processGyroBiasNoBuffer(gx, gy, gz, &GYRO_BIAS);
 #else
-  gyroBiasFound = processGyroBias(gx, gy, gz, &gyroBias);
+  gyroBiasFound = processGyroBias(gx, gy, gz, &GYRO_BIAS);
 #endif
   if (gyroBiasFound)
   {
      processAccScale(ax, ay, az);
   }
 
-  sensors.gyro.x = -(gx - gyroBias.x) * SENSORS_DEG_PER_LSB_CFG;
-  sensors.gyro.y =  (gy - gyroBias.y) * SENSORS_DEG_PER_LSB_CFG;
-  sensors.gyro.z =  (gz - gyroBias.z) * SENSORS_DEG_PER_LSB_CFG;
-  applyAxis3fLpf((lpf2pData*)(&gyroLpf), &sensors.gyro);
+  sensors.gyro.x = gx * SENSORS_DEG_PER_LSB_CFG;
+  sensors.gyro.y = gy * SENSORS_DEG_PER_LSB_CFG;
+  sensors.gyro.z = gz * SENSORS_DEG_PER_LSB_CFG;
 
-  accScaled.x = -(ax) * SENSORS_G_PER_LSB_CFG / accScale;
-  accScaled.y =  (ay) * SENSORS_G_PER_LSB_CFG / accScale;
-  accScaled.z =  (az) * SENSORS_G_PER_LSB_CFG / accScale;
+  applyAxis3fLpf((lpf2pData*)(&gyroLpf), &sensors.gyro);
+  sensors.gyro.x -= GYRO_BIAS.x;
+  sensors.gyro.y -= GYRO_BIAS.y;
+  sensors.gyro.z -= GYRO_BIAS.z;
+
+
+  accScaled.x = ax * SENSORS_G_PER_LSB_CFG / ACC_SCALE;
+  accScaled.y = ay * SENSORS_G_PER_LSB_CFG / ACC_SCALE;
+  accScaled.z = az * SENSORS_G_PER_LSB_CFG / ACC_SCALE;
   sensorsAccAlignToGravity(&accScaled, &sensors.acc);
+
   applyAxis3fLpf((lpf2pData*)(&accLpf), &sensors.acc);
+  sensors.acc.x -= ACC_BIAS.x;
+  sensors.acc.y -= ACC_BIAS.y;
+  sensors.acc.z -= ACC_BIAS.z;
 }
 
 static void sensorsDeviceInit(void)
@@ -351,8 +362,10 @@ static void sensorsDeviceInit(void)
   mpu6500SetRate(7);
   // Set digital low-pass bandwidth
   mpu6500SetDLPFMode(MPU6500_DLPF_BW_256);
+  // mpu6500SetDLPFMode(0x07); //bypass
   // Set accelerometer digital low-pass bandwidth
-  mpu6500SetAccelDLPF(MPU6500_ACCEL_DLPF_BW_460);
+  mpu6500SetAccelDLPF(MPU6500_ACCEL_DLPF_BW_184);
+  // mpu6500SetAccelDLPF(0x07); //bypass
 #else
   // To low DLPF bandwidth might cause instability and decrease agility
   // but it works well for handling vibrations and unbalanced propellers
@@ -593,7 +606,7 @@ static bool processAccScale(int16_t ax, int16_t ay, int16_t az)
 
     if (accScaleSumCount == SENSORS_ACC_SCALE_SAMPLES)
     {
-      accScale = accScaleSum / SENSORS_ACC_SCALE_SAMPLES;
+      ACC_SCALE = accScaleSum / SENSORS_ACC_SCALE_SAMPLES;
       accBiasFound = true;
     }
   }
@@ -630,9 +643,9 @@ static bool processGyroBiasNoBuffer(int16_t gx, int16_t gy, int16_t gz, Axis3f *
     // If we then have enough samples, calculate the mean and standard deviation
     if (gyroBiasSampleCount == SENSORS_BIAS_SAMPLES)
     {
-      gyroBiasOut->x = (float)(gyroBiasSampleSum.x) / SENSORS_BIAS_SAMPLES;
-      gyroBiasOut->y = (float)(gyroBiasSampleSum.y) / SENSORS_BIAS_SAMPLES;
-      gyroBiasOut->z = (float)(gyroBiasSampleSum.z) / SENSORS_BIAS_SAMPLES;
+      gyroBiasOut->x = SENSORS_DEG_PER_LSB_CFG * (float)(gyroBiasSampleSum.x) / SENSORS_BIAS_SAMPLES;
+      gyroBiasOut->y = SENSORS_DEG_PER_LSB_CFG * (float)(gyroBiasSampleSum.y) / SENSORS_BIAS_SAMPLES;
+      gyroBiasOut->z = SENSORS_DEG_PER_LSB_CFG * (float)(gyroBiasSampleSum.z) / SENSORS_BIAS_SAMPLES;
 
 #ifdef SENSORS_GYRO_BIAS_CALCULATE_STDDEV
       gyroBiasStdDev.x = sqrtf((float)(gyroBiasSampleSumSquares.x) / SENSORS_BIAS_SAMPLES - (gyroBiasOut->x * gyroBiasOut->x));
@@ -664,9 +677,9 @@ static bool processGyroBias(int16_t gx, int16_t gy, int16_t gz, Axis3f *gyroBias
     }
   }
 
-  gyroBiasOut->x = gyroBiasRunning.bias.x;
-  gyroBiasOut->y = gyroBiasRunning.bias.y;
-  gyroBiasOut->z = gyroBiasRunning.bias.z;
+  gyroBiasOut->x = SENSORS_DEG_PER_LSB_CFG*gyroBiasRunning.bias.x;
+  gyroBiasOut->y = SENSORS_DEG_PER_LSB_CFG*gyroBiasRunning.bias.y;
+  gyroBiasOut->z = SENSORS_DEG_PER_LSB_CFG*gyroBiasRunning.bias.z;
 
   return gyroBiasRunning.isBiasValueFound;
 }
@@ -751,7 +764,7 @@ static void sensorsAddBiasValue(BiasObj* bias, int16_t x, int16_t y, int16_t z)
  */
 static bool sensorsFindBiasValue(BiasObj* bias)
 {
-  static int32_t varianceSampleTime;
+  // static int32_t varianceSampleTime;
   bool foundBias = false;
 
   if (bias->isBufferFilled)
@@ -761,15 +774,18 @@ static bool sensorsFindBiasValue(BiasObj* bias)
 
     sensorsCalculateVarianceAndMean(bias, &variance, &mean);
 
-    if (variance.x < GYRO_VARIANCE_THRESHOLD_X &&
-        variance.y < GYRO_VARIANCE_THRESHOLD_Y &&
-        variance.z < GYRO_VARIANCE_THRESHOLD_Z &&
-        (varianceSampleTime + GYRO_MIN_BIAS_TIMEOUT_MS < xTaskGetTickCount()))
+    //if (variance.x < GYRO_VARIANCE_THRESHOLD_X &&
+    //    variance.y < GYRO_VARIANCE_THRESHOLD_Y &&
+    //    variance.z < GYRO_VARIANCE_THRESHOLD_Z &&
+    //    (varianceSampleTime + GYRO_MIN_BIAS_TIMEOUT_MS < xTaskGetTickCount()))
     {
-      varianceSampleTime = xTaskGetTickCount();
+      // varianceSampleTime = xTaskGetTickCount();
       bias->bias.x = mean.x;
       bias->bias.y = mean.y;
       bias->bias.z = mean.z;
+      GYRO_VARIANCE.x = variance.x;
+      GYRO_VARIANCE.y = variance.y;
+      GYRO_VARIANCE.z = variance.z;
       foundBias = true;
       bias->isBiasValueFound = true;
     }
@@ -796,7 +812,7 @@ bool sensorsManufacturingTest(void)
     {
       mpu6500GetMotion6(&a.y, &a.x, &a.z, &g.y, &g.x, &g.z);
 
-      if (processGyroBias(g.x, g.y, g.z, &gyroBias))
+      if (processGyroBias(g.x, g.y, g.z, &GYRO_BIAS))
       {
         gyroBiasFound = true;
         DEBUG_PRINT("Gyro variance test [OK]\n");

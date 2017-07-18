@@ -37,6 +37,7 @@
 #include "sensors.h"
 #include "power_distribution.h"
 #include "ext_position.h"
+#include "physical_constants.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
@@ -102,6 +103,7 @@ static void stabilizerTask(void* param)
 {
   uint32_t tick = 0;
   uint32_t lastWakeTime;
+  uint32_t calibrationDurationTicks = 0;
   vTaskSetApplicationTaskTag(0, (void*)TASK_STABILIZER_ID_NBR);
 
   //Wait for the system to be fully started to start stabilization loop
@@ -115,6 +117,17 @@ static void stabilizerTask(void* param)
 
   while(1) {
     vTaskDelayUntil(&lastWakeTime, F2T(RATE_MAIN_LOOP));
+
+    if (!IS_CALIBRATING) {
+      calibrationDurationTicks = 0;
+    } else {
+      calibrationDurationTicks++;
+      FINISHED_CALIBRATING = false;
+      if (calibrationDurationTicks >= CALIBRATION_DURATION*RATE_MAIN_LOOP) {
+        IS_CALIBRATING = false;
+        FINISHED_CALIBRATING = true;
+      }
+    }
 
     getExtPosition(&state);
 

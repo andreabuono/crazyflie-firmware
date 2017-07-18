@@ -1,6 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
 #include "cfmath.h"
+#include "imu_types.h"
 
 #define GRAVITY (9.81f)
 #define SPEED_OF_LIGHT (299792458)
@@ -26,3 +28,22 @@ extern float NOISE_GYRO_ROLLPITCH;
 extern float NOISE_GYRO_YAW;
 extern float NOISE_ACC_XY;
 extern float NOISE_ACC_Z;
+
+// biases to be calibrated
+extern float CALIBRATION_DURATION;
+extern float CALIBRATION_IMUCONSTANT;
+extern float CALIBRATION_MOTORCONSTANT;
+extern Axis3f GYRO_BIAS;
+extern Axis3f GYRO_VARIANCE;
+extern Axis3f ACC_BIAS;
+extern Axis3f ACC_VARIANCE;
+extern float ACC_SCALE;
+extern float MOTOR_SCALE[4];
+extern float OMEGA_BIAS[3];
+extern float THRUST_BIAS;
+
+// physical states
+extern bool IS_CALIBRATING;
+extern bool FINISHED_CALIBRATING;
+extern bool IS_INFLIGHT;
+

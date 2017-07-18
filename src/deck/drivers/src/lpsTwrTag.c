@@ -33,6 +33,7 @@
 #include "task.h"
 
 #include "log.h"
+#include "param.h"
 
 #include "stabilizer_types.h"
 #ifdef ESTIMATOR_TYPE_kalman
@@ -313,5 +314,8 @@ uwbAlgorithm_t uwbTwrTagAlgorithm = {
 LOG_GROUP_START(twr)
 LOG_ADD(LOG_FLOAT, rangingSuccessRate0, &rangingSuccessRate[0])
 LOG_ADD(LOG_UINT32, rangingPerSec0, &rangingPerSec[0])
-LOG_ADD(LOG_FLOAT, stddev, &rangingStdDev)
 LOG_GROUP_STOP(twr)
+
+PARAM_GROUP_START(twr)
+PARAM_ADD(PARAM_FLOAT, stddev, &rangingStdDev)
+PARAM_GROUP_STOP(twr)
