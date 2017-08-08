@@ -31,6 +31,7 @@ ESTIMATOR          ?= complementary
 CONTROLLER         ?= pid
 POWER_DISTRIBUTION ?= stock
 SENSORS 					 ?= cf2
+MOTOR				?= cf1
 
 ######### Test activation ##########
 FATFS_DISKIO_TESTS  ?= 0	# Set to 1 to enable FatFS diskio function tests. Erases card.
@@ -138,7 +139,7 @@ PROJ_OBJ_CF1 += platform_cf1.o
 PROJ_OBJ_CF2 += platform_cf2.o physical_constants_cf2.o
 
 # Drivers
-PROJ_OBJ += exti.o nvic.o motors.o
+PROJ_OBJ += exti.o nvic.o motors_$(MOTOR).o
 PROJ_OBJ_CF1 += led_f103.o i2cdev_f103.o i2croutines.o adc_f103.o mpu6050.o
 PROJ_OBJ_CF1 += hmc5883l.o ms5611.o nrf24l01.o eeprom.o watchdog.o
 PROJ_OBJ_CF1 += eskylink.o
@@ -284,7 +285,7 @@ ifeq ($(USE_ESKYLINK), 1)
   CFLAGS += -DUSE_ESKYLINK
 endif
 
-CFLAGS += -DBOARD_REV_$(REV) -DESTIMATOR_TYPE_$(ESTIMATOR) -DCONTROLLER_TYPE_$(CONTROLLER) -DPOWER_DISTRIBUTION_TYPE_$(POWER_DISTRIBUTION)
+CFLAGS += -DBOARD_REV_$(REV) -DESTIMATOR_TYPE_$(ESTIMATOR) -DCONTROLLER_TYPE_$(CONTROLLER) -DPOWER_DISTRIBUTION_TYPE_$(POWER_DISTRIBUTION) -DMOTOR_TYPE_$(MOTOR)
 
 CFLAGS += $(PROCESSOR) $(INCLUDES) $(STFLAGS)
 ifeq ($(PLATFORM), CF1)

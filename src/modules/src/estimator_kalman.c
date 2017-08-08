@@ -202,6 +202,8 @@ static float measNoiseGyro_y = 0.2f; // radians per second
 static float measNoiseGyro_z = 0.2f; // radians per second
 static float dragXY = 0.19f;
 static float dragZ = 0.05f;
+static float sigma_a = 1.7f; 
+static float sigma_t = 2.0f;
 
 /**
  * Quadrocopter State
@@ -224,6 +226,8 @@ static float S[STATE_DIM];
 static uint16_t Sx16, Sy16, Sz16; // storage for float16 states, mainly for logging to fit more data in a packet
 static float Svx, Svy, Svz;
 
+static float th; //Thrust accumulator
+static float ac; //Accelerometer reading
 // The quad's attitude as a right quaternion (w,x,y,z)  (such that v_I = q* v_B q)
 // We store as a quaternion to allow easy normalization (in comparison to a rotation matrix),
 // while also being robust against singularities (in comparison to euler angles)
@@ -721,14 +725,22 @@ static void stateEstimatorPredict(float cmdThrust, Axis3f *acc, Axis3f *gyro, fl
   float dx, dy, dz;
   float tmpSPX, tmpSPY, tmpSPZ;
   float zacc;
+  float wa, wt;
+  float comb_a_t;
+  float sigma_c;
 
   if (IS_INFLIGHT) // only acceleration in z direction
   {
-    // TODO: In the next lines, can either use cmdThrust/mass, or acc->z. Need to test which is more reliable.
-    // cmdThrust's error comes from poorly calibrated mass, and inexact cmdThrust -> thrust map
-    // acc->z's error comes from measurement noise and accelerometer scaling
-    // zacc = cmdThrust;
-    zacc = acc->z;
+
+    ac = acc->z;    // Save accelerometer reading for log
+    th = cmdThrust;// Save Thrust accumulator for log
+    // Combine accelerometer and thrust accumulator using inverse variancen Weighting
+    wa = 1.0f / (sigma_a * sigma_a);
+    wt = 1.0f / (sigma_t * sigma_t);
+    comb_a_t = ((wa * acc->z) + (wt * cmdThrust)) / (wa + wt);
+    sigma_c = arm_sqrt(1.0f / (wa + wt));
+    zacc = comb_a_t;
+    procNoiseAcc_z = sigma_c;
 
     // position updates in the body frame (will be rotated to inertial frame)
     dx = S[STATE_PX] * dt;
@@ -1357,6 +1369,8 @@ LOG_GROUP_START(measured)
   LOG_ADD(LOG_FLOAT, x, &S[STATE_X])
   LOG_ADD(LOG_FLOAT, y, &S[STATE_Y])
   LOG_ADD(LOG_FLOAT, z, &S[STATE_Z])
+  LOG_ADD(LOG_FLOAT, t, &th)
+  LOG_ADD(LOG_FLOAT, a, &ac)
   LOG_ADD(LOG_UINT16, x16, &Sx16)
   LOG_ADD(LOG_UINT16, y16, &Sy16)
   LOG_ADD(LOG_UINT16, z16, &Sz16)
@@ -1374,6 +1388,8 @@ LOG_GROUP_STOP(measured)
 
 PARAM_GROUP_START(kalman)
   PARAM_ADD(PARAM_UINT8, resetEstimation, &resetEstimation)
+  PARAM_ADD(PARAM_FLOAT, sig_a, &sigma_a)
+  PARAM_ADD(PARAM_FLOAT, sig_t, &sigma_t)
   PARAM_ADD(PARAM_FLOAT, pNAcc_x, &procNoiseAcc_x)
   PARAM_ADD(PARAM_FLOAT, pNAcc_y, &procNoiseAcc_y)
   PARAM_ADD(PARAM_FLOAT, pNAcc_z, &procNoiseAcc_z)
